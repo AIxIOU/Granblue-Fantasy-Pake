@@ -61,11 +61,38 @@ jobs:
           # A tag is the source of truth for released versions; the dispatch
           # input exists so this can be exercised without tagging.
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            VERSION="${GITHUB_REF_NAME#v}"
+            RAW="${GITHUB_REF_NAME#v}"
           else
-            VERSION="${{ inputs.version }}"
+            RAW="${{ inputs.version }}"
           fi
+
+          # THE MSI PACKAGER ONLY ACCEPTS A NUMERIC PRE-RELEASE IDENTIFIER.
+          #
+          # Measured, not guessed: a dry run with 0.0.0-test built fine on
+          # macOS and Linux and failed on both Windows jobs with
+          #   "optional pre-release identifier in app version must be
+          #    numeric-only and cannot be greater than 65535 for msi target"
+          #
+          # So the human-facing tag keeps its label (v1.0.0-beta.1) while the
+          # version compiled into the app takes the trailing number from it:
+          #   v1.0.0-beta.1 -> 1.0.0-1      v1.0.0-beta.2 -> 1.0.0-2
+          #   v1.0.0        -> 1.0.0
+          # Ordering is preserved, all six builds share one version string,
+          # and Windows is satisfied.
+          BASE="${RAW%%-*}"
+          if [ "$RAW" = "$BASE" ]; then
+            VERSION="$BASE"
+          else
+            NUM="$(printf '%s' "${RAW#*-}" | grep -oE '[0-9]+$' || true)"
+            if [ -z "$NUM" ] || [ "$NUM" -gt 65535 ] 2>/dev/null; then
+              echo "::error::Pre-release tag '$RAW' has no usable trailing number (need e.g. v1.0.0-beta.1)"
+              exit 1
+            fi
+            VERSION="$BASE-$NUM"
+          fi
+          echo "Tag/input '$RAW' -> app version '$VERSION'"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "label=$RAW" >> "$GITHUB_OUTPUT"
 
           # Distinct names -> distinct bundle identifiers -> both regions can
           # be installed side by side and run at the same time.
@@ -139,7 +166,7 @@ jobs:
             while IFS= read -r -d '' f; do
               base="$(basename "$f")"
               ext="${base##*.}"
-              cp "$f" "dist-release/GranblueFantasyPake-${{ matrix.region }}-${{ steps.cfg.outputs.version }}-$RUNNER_OS.$ext"
+              cp "$f" "dist-release/GranblueFantasyPake-${{ matrix.region }}-${{ steps.cfg.outputs.label }}-$RUNNER_OS.$ext"
             done
           ls -la dist-release/
           if [ -z "$(ls -A dist-release)" ]; then
