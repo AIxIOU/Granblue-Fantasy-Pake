@@ -83,11 +83,11 @@ Grab an installer from the [**Releases**](../../releases) page. Pick the file
 for your system and your region — the **Steam** and **Japanese** builds are
 separate apps, so you can install both and run them at the same time.
 
-| Your system | Steam Granblue | Japanese Granblue |
-| --- | --- | --- |
-| Windows | `...-steam-...-Windows.msi` | `...-jp-...-Windows.msi` |
-| macOS | `...-steam-...-macOS.dmg` | `...-jp-...-macOS.dmg` |
-| Linux | `...-steam-...-Linux.deb` / `.AppImage` | `...-jp-...-Linux.deb` / `.AppImage` |
+| Your system | Steam Granblue                          | Japanese Granblue                    |
+| ----------- | --------------------------------------- | ------------------------------------ |
+| Windows     | `...-steam-...-Windows.msi`             | `...-jp-...-Windows.msi`             |
+| macOS       | `...-steam-...-macOS.dmg`               | `...-jp-...-macOS.dmg`               |
+| Linux       | `...-steam-...-Linux.deb` / `.AppImage` | `...-jp-...-Linux.deb` / `.AppImage` |
 
 ### First launch: your system will warn you
 
@@ -95,8 +95,8 @@ These builds are **not code-signed**. Signing certificates cost money and this
 is a free wrapper, so the warnings are expected and nothing is wrong with the
 download.
 
-**macOS** — you will see *"Granblue Fantasy Pake is damaged and can't be
-opened."* It is not damaged; macOS flags unsigned downloads. Drag the app to
+**macOS** — you will see _"Granblue Fantasy Pake is damaged and can't be
+opened."_ It is not damaged; macOS flags unsigned downloads. Drag the app to
 Applications, then run this once:
 
 ```sh
