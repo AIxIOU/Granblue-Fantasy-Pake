@@ -1,242 +1,132 @@
-<h4 align="right"><strong>English</strong> | <a href="README_CN.md">简体中文</a></h4>
 <p align="center">
-    <img src=https://gw.alipayobjects.com/zos/k/fa/logo-modified.png width=138/>
+  <img src="./icon/gbf-europa-icon.png" width="120" alt="Granblue Fantasy Pake">
 </p>
-<h1 align="center">Pake</h1>
-<p align="center"><strong>Turn any webpage into a desktop app with one command, supports macOS, Windows, and Linux</strong></p>
-<div align="center">
-    <a href="https://twitter.com/HiTw93" target="_blank">
-    <img alt="twitter" src="https://img.shields.io/badge/follow-Tw93-red?style=flat-square&logo=Twitter"></a>
-    <a href="https://t.me/+9f9gf4ZrFSQ2OWVl" target="_blank">
-    <img alt="telegram" src="https://img.shields.io/badge/chat-telegram-blueviolet?style=flat-square&logo=Telegram"></a>
-    <a href="https://github.com/tw93/Pake/releases" target="_blank">
-    <img alt="GitHub downloads" src="https://img.shields.io/github/downloads/tw93/Pake/total.svg?style=flat-square"></a>
-    <a href="https://github.com/tw93/Pake/commits" target="_blank">
-    <img alt="GitHub commit" src="https://img.shields.io/github/commit-activity/m/tw93/Pake?style=flat-square"></a>
-    <a href="https://github.com/tw93/Pake/issues?q=is%3Aissue+is%3Aclosed" target="_blank">
-    <img alt="GitHub closed issues" src="https://img.shields.io/github/issues-closed/tw93/Pake.svg?style=flat-square"></a>
-</div>
+
+<h1 align="center">Granblue Fantasy Pake</h1>
+
+<p align="center">
+  A lightweight desktop wrapper for <strong>Granblue Fantasy</strong>, with a navigation sidebar.<br>
+  Built with <a href="https://github.com/tw93/Pake">Pake</a> (Tauri) — this repository is a fork.
+</p>
+
+---
+
+## What this is
+
+Granblue Fantasy runs in a browser. This packages it as a **standalone desktop application**, so it lives in its own window with its own icon and taskbar entry instead of competing with thirty other tabs.
+
+On top of that, it injects a **sidebar** into the page: one-click navigation to the screens you actually use, with keyboard shortcuts, that stays out of the game's way.
+
+That is the whole scope. It is a window around the website, plus a menu — see [What it deliberately does not do](#what-it-deliberately-does-not-do).
+
+## Screenshots
+
+**The sidebar during a raid.** Navigation, Management and More sections, each entry with its `Alt` shortcut. Back / Reload / Lock stay pinned at the bottom no matter how far the list is scrolled.
+
+![Sidebar during combat](./README/sidebar-in-combat.webp)
+
+**Unlocked, on a wide window.** Granblue's own chat and help panel is allowed to appear alongside the game.
+
+![Unlocked, with the game's own side panel visible](./README/unlocked-gbf-panel.webp)
+
+**Collapsed to icons.** On a narrow window the sidebar drops to icon-only on its own, so the game never loses space it needs. Section headings shrink to a single letter.
+
+![Collapsed icon-only sidebar](./README/collapsed-icon-only.webp)
+
+**The wiki open beside the game.** Pressing Wiki widens the window to the right and fills the new space with [gbf.wiki](https://gbf.wiki), so nothing is taken from the game. Closing it hands the width straight back. The panel picks the widest size that fits your screen, and there is a jump-to-page box in its header.
+
+![The wiki panel open beside the game](./README/wiki-panel.webp)
 
 ## Features
 
-- 🎐 **Lightweight**: Installer is nearly 20 times smaller than Electron packages, typically under 10M on disk
-- 🚀 **Fast**: Built with Rust Tauri, much faster than traditional JS frameworks with lower memory usage
-- ⚡ **Easy to use**: One-command packaging via CLI or online building, no complex configuration needed
-- 📦 **Feature-rich**: Supports shortcuts, immersive windows, drag & drop, style customization, ad removal
+- **Navigation sidebar** — Home, Party, Quests, Raids, Co-op, Crew, Supplies, Inventory, Crate, Stash, Profile, Shop, Journey Drops, Arcarum, Alchemy Lab, Trial Battles, Casino, Gacha.
+- **Keyboard shortcuts** — every entry has an `Alt` combination, shown on the button. Plus `Alt+\` to collapse, `Alt+L` to lock, `Alt+R` to reload, `Alt+←` to go back.
+- **Locked mode** — hides the game's own chat/help panel and keeps the game area compact, so it does not sprawl across a wide monitor. Toggle it off any time to get the panel back.
+- **Auto-collapse** — when the window gets narrow the sidebar switches to icons by itself, and expands again once there is room.
+- **Edge tracking** — the sidebar snaps to the game's real right edge as the window resizes, rather than floating at a fixed offset.
+- **Drag-to-scroll with momentum** — click and drag anywhere in the sidebar, or in any scrollable part of the game, and flick to coast.
+- **Wiki panel** — a slide-out panel holding [gbf.wiki](https://gbf.wiki) beside the game, with a jump-to-page box. The window widens to make room, and gives the width back when you close it.
+- **Faster cold loads** — preconnect and DNS-prefetch hints for the asset CDN and related hosts, applied as the very first thing on every page load.
 
-## Getting Started
+## What it deliberately does not do
 
-- **Beginners**: Download ready-made [Popular Packages](#popular-packages) or use [Online Building](docs/github-actions-usage.md) with no environment setup required
-- **Developers**: Install [CLI Tool](docs/cli-usage.md) for one-command packaging of any website with customizable icons, window settings, and more
-- **Advanced Users**: Clone the project locally for [Custom Development](#development), or check [Advanced Usage](docs/advanced-usage.md) for style customization and feature enhancement
-- **Troubleshooting**: Check [FAQ](docs/faq.md) for common issues and solutions
+**This does not automate, assist with, or interfere with playing Granblue Fantasy.** That is a design constraint, not an oversight.
 
-## Popular Packages
+- **No automation of any kind.** No macros, no botting, no auto-battle, no scripted actions, no timers that act for you. It never clicks anything in the game on your behalf.
+- **It does not read game state.** It does not scrape AP/EP, currency, inventory, drop results, or anything else out of the page. It deliberately avoids depending on Granblue's internal markup for data — partly because that would mean reading game data, and partly because the game changes that markup whenever it likes.
+- **Navigation only changes the URL.** Pressing a sidebar button sets the page's hash — exactly what happens when you click through the game's own menus. It does not call the game's API and has no knowledge of any endpoint.
+- **No modification of the game.** No patched files, no intercepted or rewritten network traffic, no injected gameplay behaviour. The only injection is the sidebar's own interface, plus the CSS needed to make room for it.
+- **The game itself is untouched.** Granblue runs exactly as it does in a browser, at the same speed, with the same behaviour. If something breaks in-game, this wrapper is almost certainly not the cause — try the same thing in a browser to confirm.
 
-<table>
-    <tr>
-        <td>WeRead
-            <a href="https://github.com/tw93/Pake/releases/latest/download/WeRead.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/WeRead_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/WeRead_x86_64.deb">Linux</a>
-        </td>
-        <td>Twitter
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Twitter.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Twitter_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Twitter_x86_64.deb">Linux</a>
-        </td>
-    </tr>
-    <tr>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/WeRead.jpg width=600/></td>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/Twitter.jpg width=600/></td>
-    </tr>
-    <tr>
-        <td>Grok
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Grok.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Grok_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Grok_x86_64.deb">Linux</a>
-        </td>
-        <td>DeepSeek
-            <a href="https://github.com/tw93/Pake/releases/latest/download/DeepSeek.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/DeepSeek_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/DeepSeek_x86_64.deb">Linux</a>
-        </td>
-    </tr>
-    <tr>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/Grok.png width=600/></td>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/DeepSeek.png width=600/></td>
-    </tr>
-    <tr>
-        <td>ChatGPT
-            <a href="https://github.com/tw93/Pake/releases/latest/download/ChatGPT.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/ChatGPT_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/ChatGPT_x86_64.deb">Linux</a>
-        </td>
-        <td>Gemini
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Gemini.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Gemini_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Gemini_x86_64.deb">Linux</a>
-        </td>
-    </tr>
-    <tr>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/ChatGPT.png width=600/></td>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/Gemini.png width=600/></td>
-    </tr>
-    <tr>
-      <td>YouTube Music
-            <a href="https://github.com/tw93/Pake/releases/latest/download/YouTubeMusic.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/YouTubeMusic_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/YouTubeMusic_x86_64.deb">Linux</a>
-      </td>
-      <td>YouTube
-            <a href="https://github.com/tw93/Pake/releases/latest/download/YouTube.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/YouTube_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/YouTube_x86_64.deb">Linux</a>
-      </td>
-    </tr>
-    <tr>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/YouTubeMusic.png width=600 /></td>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/YouTube.jpg width=600 /></td>
-    </tr>
-    <tr>
-        <td>LiZhi
-            <a href="https://github.com/tw93/Pake/releases/latest/download/LiZhi.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/LiZhi_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/LiZhi_x86_64.deb">Linux</a>
-        </td>
-        <td>ProgramMusic
-            <a href="https://github.com/tw93/Pake/releases/latest/download/ProgramMusic.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/ProgramMusic_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/ProgramMusic_x86_64.deb">Linux</a>
-        </td>
-    </tr>
-    <tr>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/LiZhi.jpg width=600/></td>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/ProgramMusic.jpg width=600/></td>
-    </tr>
-    <tr>
-        <td>Excalidraw
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Excalidraw.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Excalidraw_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Excalidraw_x86_64.deb">Linux</a>
-        </td>
-        <td>XiaoHongShu
-            <a href="https://github.com/tw93/Pake/releases/latest/download/XiaoHongShu.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/XiaoHongShu_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/XiaoHongShu_x86_64.deb">Linux</a>
-        </td>
-    </tr>
-    <tr>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/Excalidraw.png width=600/></td>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/XiaoHongShu.png width=600/></td>
-    </tr>
-    <tr>
-        <td>Notion
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Notion.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Notion_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Notion_x86_64.deb">Linux</a>
-        </td>
-        <td>Flomo
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Flomo.dmg">Mac</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Flomo_x64.msi">Windows</a>
-            <a href="https://github.com/tw93/Pake/releases/latest/download/Flomo_x86_64.deb">Linux</a>
-        </td>
-    </tr>
-    <tr>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/Notion.png width=600/></td>
-        <td><img src=https://raw.githubusercontent.com/tw93/static/main/pake/Flomo.png width=600/></td>
-    </tr>
-</table>
+In short: it is a window and a menu. Everything you do in the game, you do yourself.
 
-<details>
-<summary>🏂 You can download more applications from <a href="https://github.com/tw93/Pake/releases">Releases</a>. <b>Click here to expand the shortcuts reference!</b></summary>
+## Supported operating systems
 
-<br/>
+Platform support comes from **Pake/Tauri**, which renders through each system's own WebView instead of bundling a browser. That is why the app is small — and it is also why the requirements below are the system's rather than ours.
 
-| Mac                                                       | Windows/Linux                                       | Function                            |
-| --------------------------------------------------------- | --------------------------------------------------- | ----------------------------------- |
-| <kbd>⌘</kbd> + <kbd>[</kbd>                               | <kbd>Ctrl</kbd> + <kbd>←</kbd>                      | Return to the previous page         |
-| <kbd>⌘</kbd> + <kbd>]</kbd>                               | <kbd>Ctrl</kbd> + <kbd>→</kbd>                      | Go to the next page                 |
-| <kbd>⌘</kbd> + <kbd>↑</kbd>                               | <kbd>Ctrl</kbd> + <kbd>↑</kbd>                      | Auto scroll to top of page          |
-| <kbd>⌘</kbd> + <kbd>↓</kbd>                               | <kbd>Ctrl</kbd> + <kbd>↓</kbd>                      | Auto scroll to bottom of page       |
-| <kbd>⌘</kbd> + <kbd>r</kbd>                               | <kbd>Ctrl</kbd> + <kbd>r</kbd>                      | Refresh Page                        |
-| <kbd>⌘</kbd> + <kbd>w</kbd>                               | <kbd>Ctrl</kbd> + <kbd>w</kbd>                      | Hide window, not quit               |
-| <kbd>⌘</kbd> + <kbd>-</kbd>                               | <kbd>Ctrl</kbd> + <kbd>-</kbd>                      | Zoom out the page                   |
-| <kbd>⌘</kbd> + <kbd>=</kbd>                               | <kbd>Ctrl</kbd> + <kbd>=</kbd>                      | Zoom in the Page                    |
-| <kbd>⌘</kbd> + <kbd>0</kbd>                               | <kbd>Ctrl</kbd> + <kbd>0</kbd>                      | Reset the page zoom                 |
-| <kbd>⌘</kbd> + <kbd>L</kbd>                               | <kbd>Ctrl</kbd> + <kbd>L</kbd>                      | Copy Current Page URL               |
-| <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>⌥</kbd> + <kbd>V</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd>   | Paste and Match Style               |
-| <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>H</kbd>                | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd>   | Go to Home Page                     |
-| <kbd>⌘</kbd> + <kbd>⌥</kbd> + <kbd>I</kbd>                | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>I</kbd>   | Toggle Developer Tools (Debug Only) |
-| <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>⌫</kbd>                | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Del</kbd> | Clear Cache & Restart               |
-| <kbd>⌃</kbd> + <kbd>⌘</kbd> + <kbd>F</kbd>                | <kbd>F11</kbd>                                      | Toggle native window fullscreen     |
+| OS          | Package                             | Renders with | Notes                                                                                             |
+| ----------- | ----------------------------------- | ------------ | ------------------------------------------------------------------------------------------------- |
+| **Windows** | `.msi`                              | WebView2     | Included in Windows 11 and current Windows 10. Older installs may need the WebView2 Runtime once. |
+| **macOS**   | `.dmg`                              | WKWebView    | Intel and Apple Silicon. A universal binary can be produced with the `multi_arch` option.         |
+| **Linux**   | `.deb`, `.appimage`, `.rpm`, `.zst` | WebKitGTK    | See the caveat below.                                                                             |
 
-In addition, double-click the title bar to switch to full-screen mode. On Windows and Linux, use `--hide-window-decorations` for a frameless window with a top drag region. For Mac users, you can also use the gesture to go to the previous or next page and drag the title bar to move the window. The new menu also offers options for navigation, zoom, and window controls.
+**Linux caveat.** Builds run on `ubuntu-24.04`, so packages expect that generation of WebKitGTK and glibc. Older distributions may refuse to install, or may launch to a blank window. Pake exposes `PAKE_LINUX_WEBKIT_SAFE_MODE` for Wayland compositors where the default rendering workarounds make input or window controls unreliable.
 
-</details>
+**Small rendering differences between platforms are expected.** Three different WebView engines means minor variation in fonts, scrollbars and animation smoothing.
 
-## Command-Line Packaging
+## Building it
 
-![Pake](https://raw.githubusercontent.com/tw93/static/main/pake/pake1.gif)
+There are no prebuilt downloads. Builds run through GitHub Actions:
 
-```bash
-# Install Pake CLI
-pnpm install -g pake-cli
+1. Open the [**Build Dynamic Mobile App With Pake CLI**](../../actions/workflows/GBF_Pake_App.yaml) workflow.
+2. Click **Run workflow**.
+3. Pick a platform — `windows-latest`, `macos-latest`, or `ubuntu-24.04`.
+4. Download the artifact when the run finishes.
 
-# Basic usage - automatically fetches website icon
-pake https://github.com --name GitHub
+The defaults are already set for Granblue Fantasy: the Steam URL, the app name, and the icon. Other options include window size, a system tray with hide-on-close, a global activation hotkey, Linux package formats, and `debug` to enable devtools.
 
-# Advanced usage with custom options
-pake https://weekly.tw93.fun --name Weekly --icon https://cdn.tw93.fun/pake/weekly.icns --width 1200 --height 800 --hide-title-bar
-```
+> **Artifacts expire after a few days.** Rerun the workflow when you need a fresh build.
 
-First-time packaging requires environment setup and may be slower, subsequent builds are fast. For complete parameter documentation, see [CLI Usage Guide](docs/cli-usage.md). Don't want to use CLI? Try [GitHub Actions Online Building](docs/github-actions-usage.md).
+## Known limitations
 
-Using Pake from a script or AI agent? Pass `--json` for machine-readable results, describe apps declaratively with `--config app.json` ([schema](schema/pake.schema.json)), and package local build output directly with `pake ./dist --name MyTool`. See [llms.txt](llms.txt) for the full agent contract and the [canonical product page](https://faberon.io/projects/pake) for recommendation context. Claude Code users can install the official skill with `/plugin marketplace add tw93/Pake` and `/plugin install pake@pake`.
+**Testing.** Only the **Windows** build against `steam.granbluefantasy.com` is regularly tested. Support for `game.granbluefantasy.jp` is built from real captured data but is **unverified** — treat it as untested rather than broken.
 
-Copy this to your AI agent to get started:
+**The window cannot be locked to a fixed size.** The Pake CLI offers an initial size and a minimum size, but no maximum and no way to disable resizing. Locked mode governs the _game's_ layout within the window; it cannot constrain the window itself.
 
-```text
-Use Pake (npm i -g pake-cli) to package webpages as desktop apps. Read https://unpkg.com/pake-cli@latest/llms.txt first; always run pake with --json and parse stdout as a single JSON object. Package <url-or-local-dist> into an app named <AppName>.
-```
+**The wiki panel cannot be scripted from the outside.** It is an ordinary cross-origin iframe, so nothing can read its contents or know which page it is showing. That is the browser's same-origin policy, not a limitation of this app. In practice it only means there is no Back button and no current-page display; Home and the search box work, and browsing inside the wiki behaves normally.
 
-## Development
+**The sidebar depends on the game's page structure for positioning.** It measures the game's container in order to place itself. That element has been stable across many Granblue updates, but a large enough layout change on the game's side could require an update here.
 
-Requires Rust `>=1.85` and Node `>=22` (recommended LTS; `>=20` also works). For detailed installation guide, see [Tauri documentation](https://v2.tauri.app/start/prerequisites/). If unfamiliar with development environment, use the CLI tool instead.
+## Disclaimer
 
-```bash
-# Install dependencies
-pnpm i
+This is an **unofficial fan project**. It is not affiliated with, endorsed by, or connected to Cygames or the Granblue Fantasy team. Granblue Fantasy and all related assets belong to their respective owners. The screenshots above show the game purely to illustrate where the sidebar sits.
 
-# Local development [right-click to open debug mode]
-pnpm run dev
+---
 
-# Build application
-pnpm run build
-```
+## Built on Pake
 
-For style customization, feature enhancement, container communication and other advanced features, see [Advanced Usage Documentation](docs/advanced-usage.md).
+This repository is a **fork of [tw93/Pake](https://github.com/tw93/Pake)**, which does all of the heavy lifting. Pake turns any webpage into a desktop application using Rust and Tauri, rendering through the operating system's own WebView — which is why the resulting app is a fraction of the size of an Electron equivalent.
 
-## Developers
+Everything on this page describes the Granblue Fantasy wrapper specifically. **For Pake itself — what it does, how to package any other site, the CLI, and its own documentation — go to the [upstream repository](https://github.com/tw93/Pake).** Pake's own README is not in this fork; this file replaced it, because GitHub shows only one README per repository.
 
-Pake's development can not be without these Hackers. They contributed a lot of capabilities for Pake. Also, welcome to follow them! ❤️
+Pake's documentation is still included here, unmodified:
 
-<a href="https://github.com/tw93/Pake/graphs/contributors">
-  <img src="./CONTRIBUTORS.svg?v=2" alt="Contributors" width="1000" />
-</a>
+|                                                        |                                                      |
+| ------------------------------------------------------ | ---------------------------------------------------- |
+| [CLI usage](./docs/cli-usage.md)                       | Every flag and option                                |
+| [GitHub Actions usage](./docs/github-actions-usage.md) | Building without a local toolchain                   |
+| [Advanced usage](./docs/advanced-usage.md)             | Local development and build requirements             |
+| [FAQ](./docs/faq.md)                                   | Blank windows, Linux/Wayland issues, memory use      |
+| [README_CN.md](./README_CN.md)                         | Pake's own README, Chinese — untouched from upstream |
 
-## Support
+### Credits
 
-- The most direct way to support me is getting [Mole for Mac](https://mole.fit), my paid Mac cleanup app.
-- If Pake helped you, give it a star, [share it](https://twitter.com/intent/tweet?url=https://github.com/tw93/Pake&text=Pake%20-%20Turn%20any%20webpage%20into%20a%20desktop%20app%20with%20one%20command.%20Nearly%2020x%20smaller%20than%20Electron%20packages,%20supports%20macOS%20Windows%20Linux), or open an issue or PR.
-- I have two cats, TangYuan and Coke. If you think Pake delights your life, you can feed them <a href="https://cats.tw93.fun?name=Pake" target="_blank">canned food 🥩</a>.
+Pake is by **[Tw93](https://github.com/tw93)** and its [contributors](https://github.com/tw93/Pake/graphs/contributors). The sidebar, icon and build workflow in this fork are the only additions; everything else is upstream's work, kept deliberately close to it so the fork stays easy to update.
 
-<details>
-<summary>These lovely people already did 🐱</summary>
-<br/>
-<a href="https://cats.tw93.fun?name=Pake"><img src="https://cdn.jsdelivr.net/gh/tw93/sponsors@main/assets/sponsors.svg" width="1000" loading="lazy" /></a>
-</details>
+### Licensing
 
-## License
+Pake is licensed under **GPL-3.0-or-later** — see [LICENSE](./LICENSE). As a fork of Pake's source, **this repository is bound by the GPLv3 too**.
 
-Pake is open source under GPL-3.0, see [LICENSE](./LICENSE) and [Pake Output Exception](./LICENSE-EXCEPTION); apps you build with Pake are entirely yours to use and distribute. If you fork Pake into your own product, to avoid confusion please give it a different name and credit Pake as the source.
+Applications _built_ with Pake are treated differently. The [Pake Output Exception](./LICENSE-EXCEPTION) grants an additional permission under section 7 of the GPLv3: an app produced by the standard Pake build process is not itself made subject to the GPLv3 by the Pake parts inside it, and may be distributed under whatever terms its author chooses. In other words, a Granblue Fantasy Pake build you produce is yours; this repository is not.
+
+Upstream also asks that anyone forking Pake into a separate product give it a different name and credit the source. This project is named **Granblue Fantasy Pake** and credits Pake above.
