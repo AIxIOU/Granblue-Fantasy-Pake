@@ -48,7 +48,7 @@ That is the whole scope. It is a window around the website, plus a menu — see 
 - **Wiki panel** — a slide-out panel holding [gbf.wiki](https://gbf.wiki) beside the game, with a jump-to-page box. The window widens to make room, and gives the width back when you close it.
 - **About page** — an in-app reference for the shortcuts, the non-obvious behaviour, and the limitations and why they exist. `Alt+W` opens the wiki; the About entry sits below it.
 - **Window fits the content** — with a fixed Granblue Window Size, the app window tracks the game plus the sidebar, so there is no dead strip beside the game and nothing is cut off when you change the game's size.
-- **Multiple instances** (release builds) — open the app again for a second window, so you can sort parties or inventory while a raid is running.
+- **Multiple windows** (release builds) — open the app again and you get another window in the same app, so you can sort parties or inventory while a raid is running.
 - **Faster cold loads** — preconnect and DNS-prefetch hints for the asset CDN and related hosts, applied as the very first thing on every page load.
 
 ## What it deliberately does not do

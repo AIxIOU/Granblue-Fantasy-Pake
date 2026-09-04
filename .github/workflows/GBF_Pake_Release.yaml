@@ -124,15 +124,24 @@ jobs:
             exit 1
           fi
 
-          # --multi-instance is the point of the release build: Granblue
-          # players open a second window for parties or inventory while a raid
-          # is live. Pake defaults it to false, so it must be passed.
+          # --multi-window, NOT --multi-instance. Granblue players want a
+          # second window for parties or inventory while a raid is live, and
+          # these two flags are mutually exclusive in Pake:
+          #
+          #   if !multi_instance {                    // single-instance plugin
+          #       if multi_window { open_additional_window_safe(app) }
+          #   }
+          #
+          # So the additional-window path only exists while multi_instance is
+          # FALSE. Shipping --multi-instance in 1.0.0-1 gave separate processes
+          # whose windows stacked at the same saved position, which looked like
+          # nothing happened. One app, several windows is what was wanted.
           ARGS=(
             "${{ steps.cfg.outputs.url }}"
             "--name" "${{ steps.cfg.outputs.appname }}"
             "--inject" "$SCRIPT"
             "--icon" "./icon/gbf-europa-icon.png"
-            "--multi-instance"
+            "--multi-window"
             "--app-version" "${{ steps.cfg.outputs.version }}"
             "--width" "900" "--height" "820"
             "--min-width" "700" "--min-height" "570"
@@ -242,9 +251,9 @@ jobs:
 
             ## Multiple windows at once
 
-            These builds allow **multiple instances** - open the app again to
-            get a second window, so you can manage parties or inventory while
-            a raid is running.
+            Open the app again and you get a **second window in the same app**,
+            so you can manage parties or inventory while a raid is running.
+            Close a window and the rest keep going.
 
             ## First launch
 
