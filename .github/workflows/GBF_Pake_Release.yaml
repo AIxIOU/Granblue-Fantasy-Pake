@@ -209,19 +209,35 @@ jobs:
         shell: bash
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            V="${GITHUB_REF_NAME#v}"
+            TAG="$GITHUB_REF_NAME"
           else
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-            echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            V="${{ inputs.version }}"
+            TAG="v${{ inputs.version }}"
           fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # ANY pre-release label marks the release as a pre-release.
+          #
+          # Derived from the version rather than taken from the dispatch input,
+          # because inputs are EMPTY on a tag push -- so a v1.0.0-beta.1 tag
+          # would otherwise have published as a full release, which is the
+          # opposite of what the tag says. The manual input can still force it
+          # on for a build that has no label.
+          case "$V" in
+            *-*) PRE=true ;;
+            *)   PRE=${{ inputs.prerelease || false }} ;;
+          esac
+          echo "Release $TAG -> prerelease=$PRE"
+          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.v.outputs.tag }}
           name: Granblue Fantasy Pake ${{ steps.v.outputs.version }}
-          prerelease: ${{ inputs.prerelease || false }}
+          prerelease: ${{ steps.v.outputs.prerelease }}
           fail_on_unmatched_files: true
           files: artifacts/*
           body: |
