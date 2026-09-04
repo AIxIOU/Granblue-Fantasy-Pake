@@ -1863,11 +1863,16 @@
         innerWidth: window.innerWidth,
         spaceAchieved: space,
       });
-      // Both levers, because which one helps depends on the mode: a smaller
-      // fixed Window Size frees a fixed amount, while Automatic Resizing lets
-      // the game shrink to whatever is left.
+      // Advice has to match the mode the user is actually in. The old text
+      // offered both levers at once and so told an Automatic Resizing user to
+      // "turn on Automatic Resizing" -- seen in play on the Japanese build,
+      // where it is the default. Under Automatic we cannot widen the window
+      // for them (resizing reloads the game), so widening it themselves is the
+      // only thing that helps.
       showSidebarNotice(
-        "Not enough room. In Granblue's Browser Settings, pick a smaller Window Size or turn on Automatic Resizing.",
+        gbfUsesAutomaticResizing()
+          ? "Not enough room. Widen the window, or pick a fixed Window Size in Granblue's Browser Settings."
+          : "Not enough room. In Granblue's Browser Settings, pick a smaller Window Size.",
       );
       return;
     }
