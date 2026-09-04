@@ -79,9 +79,13 @@ Platform support comes from **Pake/Tauri**, which renders through each system's 
 
 ## Download
 
-Grab an installer from the [**Releases**](../../releases) page. Pick the file
-for your system and your region — the **Steam** and **Japanese** builds are
-separate apps, so you can install both and run them at the same time.
+Grab an installer from the [**Releases**](../../releases) page. **Take the
+newest release at the top** — older ones may be marked *(superseded)* in their
+title, which means a known problem was fixed in a later build.
+
+Pick the file for your system and your region — the **Steam** and **Japanese**
+builds are separate apps, so you can install both and run them at the same
+time.
 
 | Your system | Steam Granblue                          | Japanese Granblue                    |
 | ----------- | --------------------------------------- | ------------------------------------ |
