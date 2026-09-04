@@ -39,13 +39,16 @@ That is the whole scope. It is a window around the website, plus a menu — see 
 
 ## Features
 
-- **Navigation sidebar** — Home, Party, Quests, Raids, Co-op, Crew, Supplies, Inventory, Crate, Stash, Profile, Shop, Journey Drops, Arcarum, Alchemy Lab, Trial Battles, Casino, Gacha.
+- **Navigation sidebar** — Home, Party, Quests, Raids, Co-op, Crew, Supplies, Inventory, Crate, Stash, Profile, Shop, Journey Drops, Arcarum, Alchemy Lab, Trial Battles, Casino, Gacha, Wiki, About.
 - **Keyboard shortcuts** — every entry has an `Alt` combination, shown on the button. Plus `Alt+\` to collapse, `Alt+L` to lock, `Alt+R` to reload, `Alt+←` to go back.
 - **Locked mode** — hides the game's own chat/help panel and keeps the game area compact, so it does not sprawl across a wide monitor. Toggle it off any time to get the panel back.
 - **Auto-collapse** — when the window gets narrow the sidebar switches to icons by itself, and expands again once there is room.
 - **Edge tracking** — the sidebar snaps to the game's real right edge as the window resizes, rather than floating at a fixed offset.
 - **Drag-to-scroll with momentum** — click and drag anywhere in the sidebar, or in any scrollable part of the game, and flick to coast.
 - **Wiki panel** — a slide-out panel holding [gbf.wiki](https://gbf.wiki) beside the game, with a jump-to-page box. The window widens to make room, and gives the width back when you close it.
+- **About page** — an in-app reference for the shortcuts, the non-obvious behaviour, and the limitations and why they exist. `Alt+W` opens the wiki; the About entry sits below it.
+- **Window fits the content** — with a fixed Granblue Window Size, the app window tracks the game plus the sidebar, so there is no dead strip beside the game and nothing is cut off when you change the game's size.
+- **Multiple instances** (release builds) — open the app again for a second window, so you can sort parties or inventory while a raid is running.
 - **Faster cold loads** — preconnect and DNS-prefetch hints for the asset CDN and related hosts, applied as the very first thing on every page load.
 
 ## What it deliberately does not do
@@ -74,26 +77,62 @@ Platform support comes from **Pake/Tauri**, which renders through each system's 
 
 **Small rendering differences between platforms are expected.** Three different WebView engines means minor variation in fonts, scrollbars and animation smoothing.
 
-## Building it
+## Download
 
-There are no prebuilt downloads. Builds run through GitHub Actions:
+Grab an installer from the [**Releases**](../../releases) page. Pick the file
+for your system and your region — the **Steam** and **Japanese** builds are
+separate apps, so you can install both and run them at the same time.
+
+| Your system | Steam Granblue | Japanese Granblue |
+| --- | --- | --- |
+| Windows | `...-steam-...-Windows.msi` | `...-jp-...-Windows.msi` |
+| macOS | `...-steam-...-macOS.dmg` | `...-jp-...-macOS.dmg` |
+| Linux | `...-steam-...-Linux.deb` / `.AppImage` | `...-jp-...-Linux.deb` / `.AppImage` |
+
+### First launch: your system will warn you
+
+These builds are **not code-signed**. Signing certificates cost money and this
+is a free wrapper, so the warnings are expected and nothing is wrong with the
+download.
+
+**macOS** — you will see *"Granblue Fantasy Pake is damaged and can't be
+opened."* It is not damaged; macOS flags unsigned downloads. Drag the app to
+Applications, then run this once:
+
+```sh
+xattr -cr "/Applications/Granblue Fantasy Pake.app"
+```
+
+(For the Japanese build, use `Granblue Fantasy Pake JP.app`.)
+
+**Windows** — SmartScreen shows a blue warning. Click **More info** → **Run
+anyway**.
+
+**Linux** — `sudo dpkg -i GranblueFantasyPake-*.deb`, or `chmod +x` the
+`.AppImage` and run it.
+
+## Building it yourself
+
+You do not need to — the releases above are prebuilt — but every build runs
+through GitHub Actions:
 
 1. Open the [**Build Dynamic Mobile App With Pake CLI**](../../actions/workflows/GBF_Pake_App.yaml) workflow.
-2. Click **Run workflow**.
-3. Pick a platform — `windows-latest`, `macos-latest`, or `ubuntu-24.04`.
-4. Download the artifact when the run finishes.
+2. Click **Run workflow** and pick a platform.
+3. Download the artifact when the run finishes.
 
-The defaults are already set for Granblue Fantasy: the Steam URL, the app name, and the icon. Other options include window size, a system tray with hide-on-close, a global activation hotkey, Linux package formats, and `debug` to enable devtools.
+The defaults are already set for Granblue Fantasy. Other options include window
+size, a system tray with hide-on-close, a global activation hotkey, Linux
+package formats, and `debug` to enable devtools.
 
-> **Artifacts expire after a few days.** Rerun the workflow when you need a fresh build.
+> **Workflow artifacts expire after a few days.** Releases do not.
 
 ## Known limitations
 
 **Testing.** Only the **Windows** build against `steam.granbluefantasy.com` is regularly tested. Support for `game.granbluefantasy.jp` is built from real captured data but is **unverified** — treat it as untested rather than broken.
 
-**The window cannot be locked to a fixed size.** The Pake CLI offers an initial size and a minimum size, but no maximum and no way to disable resizing. Locked mode governs the _game's_ layout within the window; it cannot constrain the window itself.
+**Automatic Resizing has trade-offs the fixed sizes do not.** With Granblue's own **Automatic Resizing** turned on, the game reloads itself whenever the window is resized — so the app never resizes the window for you in that mode. Two consequences: the wiki only opens if the window is already wide enough (roughly 1690px), and the empty area beside the game cannot be reclaimed, because it is Granblue's own chat column, which locked mode hides. With a fixed **Small / Medium / Large** Window Size, neither applies: the window fits itself to the game and the wiki makes its own room.
 
-**The wiki panel cannot be scripted from the outside.** It is an ordinary cross-origin iframe, so nothing can read its contents or know which page it is showing. That is the browser's same-origin policy, not a limitation of this app. In practice it only means there is no Back button and no current-page display; Home and the search box work, and browsing inside the wiki behaves normally.
+**The wiki panel cannot be scripted from the outside.** It is an ordinary cross-origin iframe, so nothing can read its contents or know which page it is showing. That is the browser's same-origin policy, not a limitation of this app. In practice it means there is no Back button and no current-page display; Home and the search box work, and links inside the wiki open in the panel while genuinely external links open in your normal browser. Closing the panel unloads the page so it stops using memory and network, which is why it reopens at the main page rather than where you left off.
 
 **The sidebar depends on the game's page structure for positioning.** It measures the game's container in order to place itself. That element has been stable across many Granblue updates, but a large enough layout change on the game's side could require an update here.
 
