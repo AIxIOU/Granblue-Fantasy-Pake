@@ -20,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version for a manual/dry-run build (e.g. 1.0.0-beta.1)"
+        description: "Version: MAJOR.MINOR.PATCH with optional numeric pre-release, e.g. 1.0.0-1"
         required: true
-        default: "0.0.0-test"
+        default: "0.0.0-1"
       publish:
         description: "Create a GitHub Release (off = build artifacts only)"
         required: false
@@ -66,38 +66,26 @@ jobs:
             RAW="${{ inputs.version }}"
           fi
 
-          # THE MSI PACKAGER ONLY ACCEPTS A NUMERIC PRE-RELEASE IDENTIFIER.
+          # ONE VERSION STRING, VALID ON EVERY PLATFORM. No translation.
           #
-          # Measured, not guessed: a dry run with 0.0.0-test built fine on
-          # macOS and Linux and failed on both Windows jobs with
+          # Semver with an optional NUMERIC pre-release identifier:
+          #   1.0.0-1   beta 1        1.0.0-2   beta 2        1.0.0   final
+          #
+          # Numeric is not a stylistic choice. Measured on a dry run with
+          # 0.0.0-test: macOS and Linux built, both Windows jobs failed with
           #   "optional pre-release identifier in app version must be
           #    numeric-only and cannot be greater than 65535 for msi target"
-          #
-          # So the human-facing tag keeps its label (v1.0.0-beta.1) while the
-          # version compiled into the app takes the trailing number from it:
-          #   v1.0.0-beta.1 -> 1.0.0-1      v1.0.0-beta.2 -> 1.0.0-2
-          #   v1.0.0        -> 1.0.0
-          # Ordering is preserved, all six builds share one version string,
-          # and Windows is satisfied.
-          BASE="${RAW%%-*}"
-          if [ "$RAW" = "$BASE" ]; then
-            VERSION="$BASE"
-          else
-            NUM="$(printf '%s' "${RAW#*-}" | grep -oE '[0-9]+$' || true)"
-            if [ -n "$NUM" ] && [ "$NUM" -le 65535 ] 2>/dev/null; then
-              VERSION="$BASE-$NUM"
-            else
-              # A label with no usable trailing number (0.0.0-test, or a
-              # 65536+ counter) still has to build. Drop the pre-release from
-              # the compiled version rather than failing the run -- the tag
-              # and the filenames keep the label either way.
-              echo "::warning::'$RAW' has no numeric pre-release identifier; compiling as $BASE"
-              VERSION="$BASE"
-            fi
+          # So this is the only pre-release form the MSI packager accepts, and
+          # using it directly means the tag, the compiled version, the release
+          # title and the filenames are all the same string.
+          if ! printf '%s' "$RAW" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]{1,5})?$'; then
+            echo "::error::Version '$RAW' is not usable. Use MAJOR.MINOR.PATCH with an optional numeric pre-release: 1.0.0-1 (beta 1), 1.0.0-2, then 1.0.0. Labels like -beta.1 fail the Windows MSI packager."
+            exit 1
           fi
-          echo "Tag/input '$RAW' -> app version '$VERSION'"
+          VERSION="$RAW"
+          echo "version -> $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "label=$RAW" >> "$GITHUB_OUTPUT"
+          echo "label=$VERSION" >> "$GITHUB_OUTPUT"
 
           # Distinct names -> distinct bundle identifiers -> both regions can
           # be installed side by side and run at the same time.
