@@ -90,7 +90,12 @@ on:
         description: "Allow opening multiple windows within a single running app instance (adds New Window to tray/File menu; relaunching also opens a new window instead of focusing the existing one)"
         required: false
         type: boolean
-        default: false
+        # ON BY DEFAULT. Granblue players keep a second window open for parties
+        # or inventory while a raid runs, so test builds should behave like
+        # releases, which always pass --multi-window. Note this only works while
+        # multi_instance is false: the additional-window path lives inside
+        # Pake's single-instance handler.
+        default: true
       targets:
         description: "Package formats (comma-separated: deb,appimage,rpm,zst)"
         required: false
