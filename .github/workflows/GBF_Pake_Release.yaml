@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version for a manual/dry-run build (e.g. 1.0.0)"
+        description: "Version for a manual/dry-run build (e.g. 1.0.0-beta.1)"
         required: true
         default: "0.0.0-test"
       publish:
@@ -84,11 +84,16 @@ jobs:
             VERSION="$BASE"
           else
             NUM="$(printf '%s' "${RAW#*-}" | grep -oE '[0-9]+$' || true)"
-            if [ -z "$NUM" ] || [ "$NUM" -gt 65535 ] 2>/dev/null; then
-              echo "::error::Pre-release tag '$RAW' has no usable trailing number (need e.g. v1.0.0-beta.1)"
-              exit 1
+            if [ -n "$NUM" ] && [ "$NUM" -le 65535 ] 2>/dev/null; then
+              VERSION="$BASE-$NUM"
+            else
+              # A label with no usable trailing number (0.0.0-test, or a
+              # 65536+ counter) still has to build. Drop the pre-release from
+              # the compiled version rather than failing the run -- the tag
+              # and the filenames keep the label either way.
+              echo "::warning::'$RAW' has no numeric pre-release identifier; compiling as $BASE"
+              VERSION="$BASE"
             fi
-            VERSION="$BASE-$NUM"
           fi
           echo "Tag/input '$RAW' -> app version '$VERSION'"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
