@@ -511,17 +511,16 @@ fn split(host: &Window, collapsed: bool, wiki_open: bool, about_open: bool) -> t
     let sidebar_w = want_bar.min((size.width - MIN_GAME_WIDTH).max(0.0));
 
     let room_for_panel = (size.width - MIN_GAME_WIDTH - sidebar_w).max(0.0);
-    let want_panel = if about_open {
-        ABOUT_W
-    } else if wiki_open {
+    let want_panel = if about_open || wiki_open {
         let chosen = host
             .app_handle()
             .state::<SidebarState>()
             .wiki_panel_w(host.label());
+        let fallback = if about_open { ABOUT_W } else { WIKI_W };
         if chosen > 1.0 {
             chosen
         } else {
-            WIKI_W
+            fallback
         }
     } else {
         0.0
@@ -742,11 +741,11 @@ fn sidebar_want(collapsed: bool) -> f64 {
     }
 }
 
-fn needed_for_wiki(game_col: f64, panel: f64, collapsed: bool) -> f64 {
+fn needed_for_panel(game_col: f64, panel: f64, collapsed: bool) -> f64 {
     game_col + panel + sidebar_want(collapsed) + WIKI_WIDEN_BUFFER
 }
 
-fn wiki_no_room_notice(automatic: bool) -> String {
+fn panel_no_room_notice(automatic: bool) -> String {
     if automatic {
         "Not enough room. Widen the window, or pick a fixed Window Size in Granblue's Browser Settings.".into()
     } else {
@@ -756,7 +755,7 @@ fn wiki_no_room_notice(automatic: bool) -> String {
 
 /// Grow the OS window to `want` logical inner width. Height is echoed so it
 /// cannot drift. Under Automatic this reloads Granblue — that is GBF's own
-/// behaviour; the wiki still has to take the width it needs.
+/// behaviour; wiki and About still have to take the width they need.
 fn grow_inner_width(host: &Window, want: f64) -> tauri::Result<f64> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
@@ -806,9 +805,14 @@ fn restore_panel_width(host: &Window) {
     let _ = host.set_size(PhysicalSize::new(want_phys, phys.height));
 }
 
-/// Pick 960 if the monitor can hold it, else 800, else refuse. Collapse the
-/// sidebar when that is what makes a tier fit.
-fn prepare_wiki_open(host: &Window) -> Result<String, String> {
+/// Pick the preferred width if the monitor can hold it, else the fallback,
+/// else refuse. Collapse the sidebar when that is what makes a tier fit.
+fn prepare_panel_open(
+    host: &Window,
+    prefer: f64,
+    minimum: f64,
+    name: &str,
+) -> Result<String, String> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     let automatic = state.is_automatic(&label);
@@ -823,37 +827,39 @@ fn prepare_wiki_open(host: &Window) -> Result<String, String> {
     };
     let ceiling = monitor_inner_ceiling(host);
 
-    let fits = |panel: f64, bar_collapsed: bool| needed_for_wiki(game_col, panel, bar_collapsed) <= ceiling + WIKI_TIER_SLACK;
+    let fits = |panel: f64, bar_collapsed: bool| {
+        needed_for_panel(game_col, panel, bar_collapsed) <= ceiling + WIKI_TIER_SLACK
+    };
 
-    let (chosen, need_collapse) = if fits(WIKI_W, collapsed) {
-        (WIKI_W, false)
-    } else if !collapsed && fits(WIKI_W, true) {
-        (WIKI_W, true)
-    } else if fits(WIKI_MIN_W, collapsed) {
-        (WIKI_MIN_W, false)
-    } else if !collapsed && fits(WIKI_MIN_W, true) {
-        (WIKI_MIN_W, true)
+    let (chosen, need_collapse) = if fits(prefer, collapsed) {
+        (prefer, false)
+    } else if !collapsed && fits(prefer, true) {
+        (prefer, true)
+    } else if fits(minimum, collapsed) {
+        (minimum, false)
+    } else if !collapsed && fits(minimum, true) {
+        (minimum, true)
     } else {
-        return Err(wiki_no_room_notice(automatic));
+        return Err(panel_no_room_notice(automatic));
     };
 
     let mut note = String::new();
     if need_collapse {
         state.collapse_for_panel(&label);
-        note.push_str("Sidebar collapsed to make room for the wiki.\n");
+        note.push_str(&format!("Sidebar collapsed to make room for the {name}.\n"));
     }
-    let want = needed_for_wiki(game_col, chosen, collapsed || need_collapse);
+    let want = needed_for_panel(game_col, chosen, collapsed || need_collapse);
     let after = grow_inner_width(host, want).map_err(|e| e.to_string())?;
     let bar = sidebar_want(collapsed || need_collapse);
     let space = (after - game_col - bar).max(0.0);
-    let reserved = if space >= WIKI_W - WIKI_TIER_SLACK {
-        space.min(WIKI_W)
-    } else if space >= WIKI_MIN_W {
-        space.min(WIKI_MIN_W)
+    let reserved = if space >= prefer - WIKI_TIER_SLACK {
+        space.min(prefer)
+    } else if space >= minimum {
+        space.min(minimum)
     } else {
         0.0
     };
-    if reserved < WIKI_MIN_W {
+    if reserved < minimum {
         if need_collapse {
             state.update(&label, |f| {
                 f.collapsed = false;
@@ -861,12 +867,20 @@ fn prepare_wiki_open(host: &Window) -> Result<String, String> {
             });
         }
         restore_panel_width(host);
-        return Err(wiki_no_room_notice(automatic));
+        return Err(panel_no_room_notice(automatic));
     }
     state.set_wiki_panel_w(&label, reserved);
     Ok(format!(
-        "{note}wiki_tier={reserved:.0} game_col={game_col:.0} ceiling={ceiling:.0} after={after:.0}\n"
+        "{note}{name}_tier={reserved:.0} game_col={game_col:.0} ceiling={ceiling:.0} after={after:.0}\n"
     ))
+}
+
+fn prepare_wiki_open(host: &Window) -> Result<String, String> {
+    prepare_panel_open(host, WIKI_W, WIKI_MIN_W, "wiki")
+}
+
+fn prepare_about_open(host: &Window) -> Result<String, String> {
+    prepare_panel_open(host, ABOUT_W, ABOUT_MIN_W, "about")
 }
 
 fn wait_for_game_edge(app: &AppHandle, label: &str) -> f64 {
@@ -878,51 +892,6 @@ fn wait_for_game_edge(app: &AppHandle, label: &str) -> f64 {
         std::thread::sleep(std::time::Duration::from_millis(80));
     }
     app.state::<SidebarState>().game_edge(label)
-}
-
-/// How much width the wiki could take right now, without opening it.
-fn wiki_room(host: &Window, collapsed: bool) -> tauri::Result<f64> {
-    let scale = host.scale_factor()?;
-    let size = host.inner_size()?.to_logical::<f64>(scale);
-    let want_bar = if collapsed {
-        SIDEBAR_W_COLLAPSED
-    } else {
-        SIDEBAR_W
-    };
-    let sidebar_w = want_bar.min((size.width - MIN_GAME_WIDTH).max(0.0));
-    Ok((size.width - MIN_GAME_WIDTH - sidebar_w).max(0.0))
-}
-
-/// Free panel width, collapsing the sidebar if that is what makes the difference.
-/// Matches `main`, which collapses the nav to open About/wiki. Under Automatic
-/// Resizing this collapse reloads the game — same as a manual toggle.
-fn ensure_panel_room(host: &Window, min_w: f64, name: &str) -> Result<String, String> {
-    let state = host.app_handle().state::<SidebarState>();
-    let label = host.label().to_string();
-    let collapsed = state.is_collapsed(&label);
-    let room = wiki_room(host, collapsed).map_err(|e| e.to_string())?;
-    if room >= min_w {
-        return Ok(String::new());
-    }
-    if collapsed {
-        return Err(format!(
-            "Not enough room for the {name}. Widen the window by about {:.0}px.",
-            (min_w - room).ceil()
-        ));
-    }
-    state.collapse_for_panel(&label);
-    let room2 = wiki_room(host, true).map_err(|e| e.to_string())?;
-    if room2 < min_w {
-        state.update(&label, |f| {
-            f.collapsed = false;
-            f.collapsed_for_panel = false;
-        });
-        return Err(format!(
-            "Not enough room for the {name}. Widen the window by about {:.0}px.",
-            (min_w - room2).ceil()
-        ));
-    }
-    Ok("Sidebar collapsed to make room.\n".into())
 }
 
 /// Place both webviews side by side across the window's client area.
@@ -978,7 +947,14 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         return Ok(out);
     }
 
-    if wiki_open && s.wiki_w + 1.0 >= WIKI_MIN_W {
+    let panel_min = if wiki_open {
+        WIKI_MIN_W
+    } else if about_open {
+        ABOUT_MIN_W
+    } else {
+        0.0
+    };
+    if (wiki_open || about_open) && panel_min > 0.0 && s.wiki_w + 1.0 >= panel_min {
         let scale = host.scale_factor()?;
         let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
         let want = col + s.wiki_w + s.sidebar_w + WIKI_WIDEN_BUFFER;
@@ -986,7 +962,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         if inner_w + HUG_SLACK < want && want <= ceiling + WIKI_TIER_SLACK {
             let after = grow_inner_width(host, want).unwrap_or(inner_w);
             if after > inner_w + 1.0 {
-                out.push_str(&format!("wiki grow {inner_w:.0}->{after:.0}\n"));
+                out.push_str(&format!("panel grow {inner_w:.0}->{after:.0}\n"));
                 return Ok(out);
             }
         }
@@ -1269,6 +1245,8 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let hug_allowed = window.app_handle().state::<SidebarState>().auto_hug_allowed(window.label());
     let hug_busy = window.app_handle().state::<SidebarState>().hug_busy(window.label());
     let last_hug = window.app_handle().state::<SidebarState>().last_hug_phys_w(window.label());
+    let wiki_open = window.app_handle().state::<SidebarState>().wiki_is_open(window.label());
+    let about_open = window.app_handle().state::<SidebarState>().about_is_open(window.label());
     let wiki_panel = window.app_handle().state::<SidebarState>().wiki_panel_w(window.label());
     let wiki_outside = window.app_handle().state::<SidebarState>().is_wiki_outside(window.label());
     let persist = crate::app::window::persisted_window_state_path(window.app_handle())
@@ -1280,7 +1258,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let monitor = monitor_inner_ceiling(&window);
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -1510,41 +1488,84 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
     let opened = app.state::<SidebarState>().wiki_is_open(&label);
     if !opened {
-        return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| wiki_no_room_notice(true)));
+        return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| panel_no_room_notice(true)));
     }
     Ok(format!("wikiOpen=true\n{report}"))
 }
 
 /// Open or close the About page. Own webview, so it cannot destroy the wiki.
+/// Same two-tier grow as the wiki: 470 preferred, 300 fallback, refuse if
+/// even 300 will not fit. Placement uses the same inside/outside flag.
 #[tauri::command]
 pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
     let was_open = app.state::<SidebarState>().about_is_open(&label);
 
-    let extra = if !was_open {
-        let note = ensure_panel_room(&window, ABOUT_MIN_W, "About")?;
-        app.state::<SidebarState>().set_about_open(&label, true);
-        note
-    } else {
+    if was_open {
         app.state::<SidebarState>().set_about_open(&label, false);
         app.state::<SidebarState>().restore_collapse_for_panel(&label);
-        String::new()
-    };
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let handle = app.clone();
+        let win_label = label.clone();
+        app.run_on_main_thread(move || {
+            let report = match handle.get_window(&win_label) {
+                Some(host) => {
+                    restore_panel_width(&host);
+                    let mut out = apply_panel_lock(&host, false);
+                    out.push_str(&layout_verbose(&host));
+                    out
+                }
+                None => format!("get_window({win_label}) -> None"),
+            };
+            let _ = tx.send(report);
+        })
+        .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+        let report = rx
+            .recv_timeout(std::time::Duration::from_secs(8))
+            .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+        return Ok(format!("aboutOpen=false\n{report}"));
+    }
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let handle = app.clone();
     let win_label = label.clone();
-
     app.run_on_main_thread(move || {
         let report = match handle.get_window(&win_label) {
-            Some(host) => {
-                let mut out = extra.clone();
-                let open_now = handle.state::<SidebarState>().about_is_open(&win_label);
-                out.push_str(&apply_panel_lock(&host, open_now));
-                out.push_str(&layout_verbose(&host));
-                out
-            }
+            Some(host) => apply_panel_lock(&host, true),
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+    let lock_report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    let _ = wait_for_game_edge(&app, &label);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = label.clone();
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            Some(host) => match prepare_about_open(&host) {
+                Ok(note) => {
+                    handle.state::<SidebarState>().set_about_open(&win_label, true);
+                    let mut out = lock_report.clone();
+                    out.push_str(&note);
+                    out.push_str(&layout_verbose(&host));
+                    out
+                }
+                Err(notice) => {
+                    handle.state::<SidebarState>().restore_collapse_for_panel(&win_label);
+                    let mut out = lock_report.clone();
+                    out.push_str(&apply_panel_lock(&host, false));
+                    out.push_str("REFUSE ");
+                    out.push_str(&notice);
+                    out.push('\n');
+                    out
+                }
+            },
             None => format!("get_window({win_label}) -> None"),
         };
         let _ = tx.send(report);
@@ -1554,8 +1575,11 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
     let report = rx
         .recv_timeout(std::time::Duration::from_secs(8))
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
-
-    Ok(format!("aboutOpen={}\n{report}", !was_open))
+    let opened = app.state::<SidebarState>().about_is_open(&label);
+    if !opened {
+        return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| panel_no_room_notice(true)));
+    }
+    Ok(format!("aboutOpen=true\n{report}"))
 }
 
 /// Step the wiki's own history back. It has real history because it is a real
