@@ -140,4 +140,13 @@
       paint(!!st.wikiOutside, trayOn, desktopOn);
     }
   };
+  // Ask for our own state on load rather than waiting to be told.
+  //
+  // About and Options share one webview, so opening Options NAVIGATES here.
+  // Rust pushes setState from its layout, which runs before this page has
+  // finished loading -- that push lands on the outgoing document and the
+  // controls would paint stale. Asking is the only ordering that cannot race.
+  invoke("gbf_panel_state")
+    .then(function (st) { window.__gbfOptions.setState(st); })
+    .catch(function () {});
 </script>

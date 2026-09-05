@@ -320,6 +320,7 @@ pub fn run_app() {
             app::sidebar::gbf_wiki_back,
             app::sidebar::gbf_wiki_home,
             app::sidebar::gbf_toggle_lock,
+            app::sidebar::gbf_panel_state,
             app::sidebar::gbf_set_wiki_outside,
             app::sidebar::gbf_set_desktop_client,
             app::sidebar::gbf_set_mobile_half,

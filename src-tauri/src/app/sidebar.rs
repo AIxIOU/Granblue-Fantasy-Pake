@@ -109,13 +109,23 @@ pub fn wiki_label(window_label: &str) -> String {
     format!("{window_label}--gbf-wiki")
 }
 
-pub fn about_label(window_label: &str) -> String {
-    format!("{window_label}--gbf-about")
+/// About and Options SHARE one webview.
+///
+/// They can never be open at once -- opening either closes the other -- they
+/// use the same width tier, and both are static local pages with no scroll
+/// position, history or session to lose. Two webviews for that cost two
+/// renderer processes, about 55 MB each measured 2026-09-05, for one visible
+/// panel. So there is one, navigated between the two pages.
+///
+/// The wiki keeps its own: it is a real site whose article, scroll position
+/// and history are worth keeping across a close.
+pub fn panel_label(window_label: &str) -> String {
+    format!("{window_label}--gbf-panel")
 }
 
-pub fn options_label(window_label: &str) -> String {
-    format!("{window_label}--gbf-options")
-}
+/// The two pages the shared panel switches between.
+const ABOUT_PAGE: &str = "gbf-about.html";
+const OPTIONS_PAGE: &str = "gbf-options.html";
 
 /// Separate from `.window-state.json` so extra keys cannot break the plugin's
 /// restore parser. Per-window, same as SidebarState.
@@ -648,15 +658,11 @@ fn wiki_webview(host: &Window) -> Option<Webview> {
     host.webviews().into_iter().find(|w| w.label() == label)
 }
 
-fn about_webview(host: &Window) -> Option<Webview> {
-    let label = about_label(host.label());
+fn panel_webview(host: &Window) -> Option<Webview> {
+    let label = panel_label(host.label());
     host.webviews().into_iter().find(|w| w.label() == label)
 }
 
-fn options_webview(host: &Window) -> Option<Webview> {
-    let label = options_label(host.label());
-    host.webviews().into_iter().find(|w| w.label() == label)
-}
 
 /// The window's client area divided between the three webviews.
 ///
@@ -1147,7 +1153,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         if let Some(bar) = sidebar_webview(host) {
             let _ = bar.hide();
         }
-        for panel in [wiki_webview(host), about_webview(host), options_webview(host)] {
+        for panel in [wiki_webview(host), panel_webview(host)] {
             if let Some(p) = panel {
                 let _ = p.hide();
             }
@@ -1282,47 +1288,31 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         }
     }
 
-    match about_webview(host) {
-        None => out.push_str("about: not created\n"),
-        Some(about) => {
-            if about_open && panel_w > 0.0 {
-                let p = about.set_position(LogicalPosition::new(panel_x, 0.0));
-                let z = about.set_size(LogicalSize::new(panel_w, s.height));
-                let v = about.show();
+    // About and Options are one webview showing one of two pages.
+    match panel_webview(host) {
+        None => out.push_str("panel: not created\n"),
+        Some(panel) => {
+            if (about_open || options_open) && panel_w > 0.0 {
+                let p = panel.set_position(LogicalPosition::new(panel_x, 0.0));
+                let z = panel.set_size(LogicalSize::new(panel_w, s.height));
+                let v = panel.show();
                 out.push_str(&format!(
-                    "about pos={} size={} show={} now={}\n",
+                    "panel({}) pos={} size={} show={} now={}\n",
+                    if about_open { "about" } else { "options" },
                     result_word(&p),
                     result_word(&z),
                     result_word(&v),
-                    bounds_word(&about),
+                    bounds_word(&panel),
                 ));
             } else {
-                out.push_str(&format!("about hide={}\n", hide_panel(&about)));
+                out.push_str(&format!("panel hide={}\n", hide_panel(&panel)));
             }
-        }
-    }
-
-    match options_webview(host) {
-        None => out.push_str("options: not created\n"),
-        Some(options) => {
-            if options_open && panel_w > 0.0 {
-                let p = options.set_position(LogicalPosition::new(panel_x, 0.0));
-                let z = options.set_size(LogicalSize::new(panel_w, s.height));
-                let v = options.show();
-                out.push_str(&format!(
-                    "options pos={} size={} show={} now={}\n",
-                    result_word(&p),
-                    result_word(&z),
-                    result_word(&v),
-                    bounds_word(&options),
-                ));
-            } else {
-                out.push_str(&format!("options hide={}\n", hide_panel(&options)));
-            }
-            let e = options.eval(format!(
+            // Harmless while About is showing: the guard is on the page, and
+            // gbf-about.html defines no __gbfOptions.
+            let e = panel.eval(format!(
                 "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile}}})"
             ));
-            out.push_str(&format!("options eval={}\n", result_word(&e)));
+            out.push_str(&format!("panel eval={}\n", result_word(&e)));
         }
     }
 
@@ -1405,11 +1395,8 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     if let Err(error) = create_wiki(&host, &sp) {
         eprintln!("[Pake][gbf] could not create the wiki webview: {error}");
     }
-    if let Err(error) = create_about(&host, &sp) {
-        eprintln!("[Pake][gbf] could not create the about webview: {error}");
-    }
-    if let Err(error) = create_options(&host, &sp) {
-        eprintln!("[Pake][gbf] could not create the options webview: {error}");
+    if let Err(error) = create_panel(&host, &sp) {
+        eprintln!("[Pake][gbf] could not create the panel webview: {error}");
     }
 
     // Restore lock before the first layout. Do not call set_lock(false) here:
@@ -1727,33 +1714,42 @@ fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
     Ok(())
 }
 
-fn create_about(host: &Window, sp: &Split) -> tauri::Result<()> {
-    let label = about_label(host.label());
+fn create_panel(host: &Window, sp: &Split) -> tauri::Result<()> {
+    let label = panel_label(host.label());
     host.add_child(
-        WebviewBuilder::new(&label, WebviewUrl::App("gbf-about.html".into()))
+        WebviewBuilder::new(&label, WebviewUrl::App(ABOUT_PAGE.into()))
             .initialization_script(include_str!("../inject/gbf-keys.js")),
         LogicalPosition::new(sp.game_w, 0.0),
         LogicalSize::new(ABOUT_W, sp.height),
     )?;
-    if let Some(w) = about_webview(host) {
+    if let Some(w) = panel_webview(host) {
         let _ = w.hide();
     }
     Ok(())
 }
 
-fn create_options(host: &Window, sp: &Split) -> tauri::Result<()> {
-    let label = options_label(host.label());
-    host.add_child(
-        WebviewBuilder::new(&label, WebviewUrl::App("gbf-options.html".into()))
-            .initialization_script(include_str!("../inject/gbf-keys.js")),
-        LogicalPosition::new(sp.game_w, 0.0),
-        LogicalSize::new(ABOUT_W, sp.height),
-    )?;
-    if let Some(w) = options_webview(host) {
-        let _ = w.hide();
+/// Point the shared panel at one of its two pages.
+///
+/// The target URL is derived from the panel's own current URL rather than
+/// built by hand: the app scheme differs by platform and config, and the two
+/// pages are siblings, so `join` is exact where a hardcoded `tauri://` guess
+/// would not be.
+fn show_panel_page(host: &Window, page: &str) -> String {
+    let Some(w) = panel_webview(host) else {
+        return format!("panel: not created\n");
+    };
+    let Ok(here) = w.url() else {
+        return format!("panel url unreadable\n");
+    };
+    if here.path().ends_with(page) {
+        return String::new();
     }
-    Ok(())
+    match here.join(page) {
+        Ok(u) => format!("panel -> {page} {}\n", result_word(&w.navigate(u))),
+        Err(e) => format!("panel url join ERR {e}\n"),
+    }
 }
+
 
 fn apply_panel_lock(host: &Window, opening: bool) -> String {
     let state = host.app_handle().state::<SidebarState>();
@@ -1959,6 +1955,8 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
                         .set_about_open(&win_label, true);
                     let mut out = lock_report.clone();
                     out.push_str(&note);
+                    // Shared webview: point it at this page before laying out.
+                    out.push_str(&show_panel_page(&host, ABOUT_PAGE));
                     out.push_str(&layout_verbose(&host));
                     out
                 }
@@ -2063,6 +2061,8 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
                         .set_options_open(&win_label, true);
                     let mut out = lock_report.clone();
                     out.push_str(&note);
+                    // Shared webview: point it at this page before laying out.
+                    out.push_str(&show_panel_page(&host, OPTIONS_PAGE));
                     out.push_str(&layout_verbose(&host));
                     out
                 }
@@ -2309,6 +2309,22 @@ pub fn gbf_set_desktop_client(window: Window, desktop: bool) -> Result<String, S
 
 /// Place Wiki / About / Options to the right of the sidebar (`outside=true`,
 /// default) or between the game and the sidebar (`outside=false`).
+/// The Options page's own state, for it to ask for on load.
+///
+/// About and Options share one webview, so opening Options navigates it and
+/// Rust's layout push races the page load. Asking cannot race.
+#[tauri::command]
+pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
+    let state = window.app_handle().state::<SidebarState>();
+    let label = window.label();
+    Ok(serde_json::json!({
+        "wikiOutside": state.is_wiki_outside(label),
+        "tray": state.is_tray_enabled(),
+        "desktopClient": state.is_desktop_client(),
+        "mobile": state.is_mobile(label),
+    }))
+}
+
 #[tauri::command]
 pub fn gbf_set_wiki_outside(window: Window, outside: bool) -> Result<String, String> {
     let app = window.app_handle().clone();
