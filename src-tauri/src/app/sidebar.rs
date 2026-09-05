@@ -893,8 +893,8 @@ fn panels_unavailable(app: &AppHandle, label: &str) -> bool {
 /// Render the mobile client at the chosen size.
 ///
 /// The mobile client is a fixed 320 CSS layout, so "size" is simply the webview
-/// zoom we render it at: Default = 2 (Granblue's full scale, a 721px game at
-/// this display) and Half = 1 (360px). Because the zoom is fixed rather than
+/// zoom we render it at: Large = 2 (Granblue's full scale, a 721px game at
+/// this display) and Small = 1 (360px). Because the zoom is fixed rather than
 /// fitted to the column, `#wrapper` has a stable width, and mobile can use the
 /// same layout and hug path as the desktop client's fixed Sizes.
 ///
@@ -1517,7 +1517,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                 out.push_str(&format!("options hide={}\n", result_word(&options.hide())));
             }
             let e = options.eval(format!(
-                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client}}})"
+                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile}}})"
             ));
             out.push_str(&format!("options eval={}\n", result_word(&e)));
         }
@@ -2417,6 +2417,9 @@ fn set_lock(host: &Window, on: bool) -> String {
 pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
+    if app.state::<SidebarState>().is_mobile(&label) {
+        return Ok("lock skipped: Layout is desktop-only\n".into());
+    }
     let now = !app.state::<SidebarState>().is_locked(&label);
     app.state::<SidebarState>().set_lock_was_auto(&label, false);
 

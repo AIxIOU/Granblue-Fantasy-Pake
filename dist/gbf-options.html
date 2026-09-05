@@ -15,7 +15,7 @@
     --line: #232838;
     --gold: #f2e2b6;
   }
-  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body {
     margin: 0; height: 100%;
     background: var(--bg); color: var(--fg);
@@ -63,6 +63,7 @@
   <p class="lede">These apply to this experiment window. Granblue's own
   Browser Settings still live in the game.</p>
 
+  <div id="opt-layout">
   <h2>Wiki and About placement</h2>
   <p class="lede">Where the wiki, About, and this page sit relative to the
   sidebar.</p>
@@ -74,6 +75,7 @@
     <b>Outside</b>
     <span>Game, then the sidebar, then the panel on the outer edge.</span>
   </button>
+  </div>
 
   <h2>Granblue client</h2>
   <button type="button" class="choice" id="opt-mobile">
@@ -135,6 +137,8 @@
       st = st || {};
       trayOn = !!st.tray;
       desktopOn = !!st.desktopClient;
+      var layout = document.getElementById("opt-layout");
+      if (layout) layout.hidden = !!st.mobile;
       paint(!!st.wikiOutside, trayOn, desktopOn);
     }
   };
