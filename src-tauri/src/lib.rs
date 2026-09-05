@@ -31,9 +31,7 @@ use app::{
         set_dock_badge_label, set_zoom, update_theme_mode, webview_navigate,
     },
     setup::{set_global_shortcut, set_system_tray, TrayRuntime},
-    window::{
-        reapply_window_icon, reveal_built_window, set_window, MultiWindowState,
-    },
+    window::{reapply_window_icon, reveal_built_window, set_window, MultiWindowState},
 };
 use util::get_pake_config;
 
@@ -386,7 +384,11 @@ pub fn run_app() {
                         STARTUP_WINDOW_FALLBACK_DELAY,
                     ))
                     .await;
-                    reveal_startup_window(window_clone.as_ref().window(), init_fullscreen, &startup_window_revealed);
+                    reveal_startup_window(
+                        window_clone.as_ref().window(),
+                        init_fullscreen,
+                        &startup_window_revealed,
+                    );
                 });
             } else {
                 // Tray/shortcut already hold clones that cancel user-driven toggles.

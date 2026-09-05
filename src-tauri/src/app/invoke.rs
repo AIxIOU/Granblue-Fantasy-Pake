@@ -61,9 +61,7 @@ fn apply_badge_label(app: &AppHandle, label: Option<&str>) -> Result<(), String>
 
 #[cfg(not(target_os = "macos"))]
 fn apply_badge_label(app: &AppHandle, label: Option<&str>) -> Result<(), String> {
-    let window = app
-        .get_window("pake")
-        .ok_or("Main window not found")?;
+    let window = app.get_window("pake").ok_or("Main window not found")?;
     let count = label.and_then(|s| s.parse::<i64>().ok());
     window
         .set_badge_count(count)

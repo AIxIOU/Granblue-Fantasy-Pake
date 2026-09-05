@@ -62,6 +62,14 @@ use tauri::{
 pub const SIDEBAR_W: f64 = 250.0;
 /// Collapsed rail width, matching `SIDEBAR_W_COLLAPSED` in gbf-scaler.js.
 pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
+/// Shown when a panel is asked for while Granblue is on Automatic Resizing.
+/// Wiki/About/Options tile the game, and tiling needs a window we are allowed
+/// to size -- which under Automatic we are not.
+/// The `NOTICE ` prefix tells the sidebar page to show this in its banner
+/// rather than dumping it into the diagnostics pane.
+const PANEL_NEEDS_FIXED_SIZE: &str =
+    "NOTICE Wiki, Options and About need a fixed Window Size. Switch Granblue to Small, Medium or Large in its Browser Settings.";
+
 /// Granblue's narrowest layout (320 x zoom 1). Never squeeze the game below it.
 const MIN_GAME_WIDTH: f64 = 320.0;
 /// Preferred reading width for the wiki panel. 960 left Extra Drop Raids
@@ -229,8 +237,6 @@ struct WindowFlags {
     auto_hug_due: bool,
     /// Automatic: one hug per user resize. Stops the walk-down after a snap.
     auto_hug_allowed: bool,
-    /// One leftover hug after Size/Full, cancelled if Size changes again.
-    size_hug_gen: u64,
     /// Physical inner width of the last Automatic hug, to ignore its Resized echo.
     last_hug_phys_w: u32,
     /// Last user width-drag under Automatic lock. Leftover hug waits so GBF
@@ -402,13 +408,12 @@ impl SidebarState {
     pub fn set_automatic(&self, label: &str, on: bool) {
         self.update(label, |f| {
             if f.automatic != on {
-                // Size/Full is not a user width-drag. A leftover hug after
-                // Full is one-shot; this token would cascade to Small.
+                // Switching Size <-> Full does nothing to the window. We no
+                // longer try to carry a fixed size across the change: GBF
+                // settles at its own natural size and the player drags from
+                // there. Clear both tokens so no hug fires on the transition.
                 f.auto_hug_allowed = false;
                 f.auto_hug_due = false;
-                if !on {
-                    f.size_hug_gen = f.size_hug_gen.wrapping_add(1);
-                }
             }
             f.automatic = on;
         });
@@ -425,19 +430,6 @@ impl SidebarState {
 
     pub fn hug_gen(&self, label: &str) -> u64 {
         self.with(label, |f| f.hug_gen)
-    }
-
-    pub fn bump_size_hug_gen(&self, label: &str) -> u64 {
-        let mut out = 0;
-        self.update(label, |f| {
-            f.size_hug_gen = f.size_hug_gen.wrapping_add(1);
-            out = f.size_hug_gen;
-        });
-        out
-    }
-
-    pub fn size_hug_gen(&self, label: &str) -> u64 {
-        self.with(label, |f| f.size_hug_gen)
     }
 
     pub fn bump_edge_apply_gen(&self, label: &str) -> u64 {
@@ -482,28 +474,19 @@ impl SidebarState {
         })
     }
 
-    /// Fixed Size wrap changes hug immediately. Switching to Automatic
-    /// schedules one leftover hug after wrap settles (not grow-room).
-    pub fn hug_if_game_size_changed(
-        &self,
-        label: &str,
-        prev_edge: f64,
-        right: f64,
-        prev_auto: bool,
-        now_auto: bool,
-    ) -> bool {
+    /// A fixed Size wrap change hugs immediately. Under Automatic nothing
+    /// is scheduled: the window is the player's, and only their own width
+    /// drag may hug (once, at GBF's cap).
+    pub fn note_game_size_change(&self, label: &str, prev_edge: f64, right: f64, now_auto: bool) {
         if !self.is_locked(label) {
-            return false;
+            return;
         }
         if self.last_auto_resize_recent(label, std::time::Duration::from_millis(2000)) {
-            return false;
+            return;
         }
         if !now_auto && prev_edge > 1.0 && (prev_edge - right).abs() > 40.0 {
             self.set_panel_hug_due(label, true);
-            return false;
         }
-        // Size → Full: wait for #wrapper to settle, then hug once.
-        prev_auto != now_auto && now_auto
     }
 
     pub fn last_hug_phys_w(&self, label: &str) -> u32 {
@@ -638,6 +621,30 @@ impl SidebarState {
             f.collapsed = true;
             f.collapsed_for_panel = true;
         });
+    }
+
+    /// Automatic has no panels. Drop every panel flag and the width-borrow
+    /// bookkeeping, without touching the window: the following `layout` hides
+    /// the webviews from these flags, and under Automatic the window is the
+    /// player's to size.
+    fn close_panels_for_automatic(&self, label: &str) -> bool {
+        let mut had = false;
+        self.update(label, |f| {
+            had = f.wiki_open || f.about_open || f.options_open;
+            f.wiki_open = false;
+            f.about_open = false;
+            f.options_open = false;
+            f.wiki_panel_w = 0.0;
+            f.panel_before_w = 0.0;
+            f.panel_after_w = 0.0;
+            f.panel_user_resized = false;
+            f.panel_hug_due = false;
+            if f.collapsed_for_panel {
+                f.collapsed = false;
+                f.collapsed_for_panel = false;
+            }
+        });
+        had
     }
 
     fn restore_collapse_for_panel(&self, label: &str) {
@@ -885,7 +892,8 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
         return;
     };
     let inner_w = phys.to_logical::<f64>(scale).width;
-    let want_w = col + reserved_panel_w(&state, &label, s.wiki_w) + sidebar_want(state.is_collapsed(&label));
+    let want_w =
+        col + reserved_panel_w(&state, &label, s.wiki_w) + sidebar_want(state.is_collapsed(&label));
     if inner_w <= want_w + HUG_SLACK {
         return;
     }
@@ -917,51 +925,18 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
     });
 }
 
-/// After Size → Full, wait until #wrapper stops moving, then hug leftover
-/// once. Further Automatic reflow must not hug (124025 / 125222).
-fn schedule_size_full_hug(app: AppHandle, label: String) {
-    let gen = app.state::<SidebarState>().bump_size_hug_gen(&label);
-    std::thread::spawn(move || {
-        let mut last = -1.0_f64;
-        let mut stable: u32 = 0;
-        for _ in 0..25 {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            let state = app.state::<SidebarState>();
-            if state.size_hug_gen(&label) != gen {
-                return;
-            }
-            if !state.is_locked(&label) || !state.is_automatic(&label) {
-                return;
-            }
-            let edge = state.game_edge(&label);
-            if edge > 1.0 && (edge - last).abs() < 20.0 {
-                stable += 1;
-            } else {
-                stable = 0;
-            }
-            last = edge;
-            if stable >= 5 {
-                break;
-            }
+/// Granblue switched to Automatic. Panels are unavailable there, so shut any
+/// open one down. State only -- the caller is not guaranteed to be on the main
+/// thread, and the `layout` that follows does the hiding.
+fn close_panels_for_automatic(app: &AppHandle, label: &str) {
+    let state = app.state::<SidebarState>();
+    if state.close_panels_for_automatic(label) {
+        if let Some(bar) = app.get_window(label).as_ref().and_then(sidebar_webview) {
+            let _ = bar.eval(
+                "window.__gbfSidebar && window.__gbfSidebar.notice &&                  window.__gbfSidebar.notice('Panels closed — Automatic Resizing has no panels.')",
+            );
         }
-        let app_main = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let state = app_main.state::<SidebarState>();
-            if state.size_hug_gen(&label) != gen {
-                return;
-            }
-            if !state.is_locked(&label) || !state.is_automatic(&label) {
-                return;
-            }
-            if state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000)) {
-                return;
-            }
-            state.set_panel_hug_due(&label, true);
-            if let Some(host) = app_main.get_window(&label) {
-                let _ = layout(&host);
-            }
-        });
-    });
+    }
 }
 
 fn restore_hug_width(host: &Window) -> String {
@@ -1472,7 +1447,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},automatic:{automatic}}})"
             ));
             let _ = bar.hide();
             let v = bar.show();
@@ -1560,28 +1535,22 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     // has to re-run the split. A user width-drag (not our hug) arms one
     // Automatic snap; GBF reflow after that snap must not arm another.
     let on_resize = host.clone();
-    host.on_window_event(move |event| {
-        match event {
-            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-                let state = on_resize.app_handle().state::<SidebarState>();
-                let label = on_resize.label().to_string();
-                if let Ok(phys) = on_resize.inner_size() {
-                    state.arm_auto_hug_if_user_resize(&label, phys.width);
-                }
-                if let Err(error) = layout(&on_resize) {
-                    eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
-                }
-                crate::app::window::schedule_persist_window_geometry(
-                    on_resize.app_handle().clone(),
-                );
+    host.on_window_event(move |event| match event {
+        WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+            let state = on_resize.app_handle().state::<SidebarState>();
+            let label = on_resize.label().to_string();
+            if let Ok(phys) = on_resize.inner_size() {
+                state.arm_auto_hug_if_user_resize(&label, phys.width);
             }
-            WindowEvent::Moved(_) => {
-                crate::app::window::schedule_persist_window_geometry(
-                    on_resize.app_handle().clone(),
-                );
+            if let Err(error) = layout(&on_resize) {
+                eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
             }
-            _ => {}
+            crate::app::window::schedule_persist_window_geometry(on_resize.app_handle().clone());
         }
+        WindowEvent::Moved(_) => {
+            crate::app::window::schedule_persist_window_geometry(on_resize.app_handle().clone());
+        }
+        _ => {}
     });
 
     Ok(())
@@ -1662,7 +1631,12 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
 
     // The two manager views side by side -- the evidence for the get_window
     // rule in the module docs.
-    let mut wv: Vec<String> = window.app_handle().webview_windows().keys().cloned().collect();
+    let mut wv: Vec<String> = window
+        .app_handle()
+        .webview_windows()
+        .keys()
+        .cloned()
+        .collect();
     wv.sort();
     let mut wins: Vec<String> = window.app_handle().windows().keys().cloned().collect();
     wins.sort();
@@ -1670,23 +1644,71 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let scale = window.scale_factor().unwrap_or(-1.0);
     let phys = window.inner_size().map_err(|e| e.to_string())?;
     let logical = phys.to_logical::<f64>(if scale > 0.0 { scale } else { 1.0 });
-    let collapsed = window.app_handle().state::<SidebarState>().is_collapsed(window.label());
-    let locked = window.app_handle().state::<SidebarState>().is_locked(window.label());
-    let edge = window.app_handle().state::<SidebarState>().game_edge(window.label());
-    let overlay_edge = window.app_handle().state::<SidebarState>().game_overlay(window.label());
-    let automatic = window.app_handle().state::<SidebarState>().is_automatic(window.label());
-    let keep = window.app_handle().state::<SidebarState>().game_keep_w(window.label());
-    let hug_allowed = window.app_handle().state::<SidebarState>().auto_hug_allowed(window.label());
-    let hug_busy = window.app_handle().state::<SidebarState>().hug_busy(window.label());
-    let last_hug = window.app_handle().state::<SidebarState>().last_hug_phys_w(window.label());
-    let wiki_open = window.app_handle().state::<SidebarState>().wiki_is_open(window.label());
-    let about_open = window.app_handle().state::<SidebarState>().about_is_open(window.label());
-    let options_open = window.app_handle().state::<SidebarState>().options_is_open(window.label());
-    let wiki_panel = window.app_handle().state::<SidebarState>().wiki_panel_w(window.label());
-    let wiki_outside = window.app_handle().state::<SidebarState>().is_wiki_outside(window.label());
-    let tray = window.app_handle().state::<SidebarState>().is_tray_enabled();
+    let collapsed = window
+        .app_handle()
+        .state::<SidebarState>()
+        .is_collapsed(window.label());
+    let locked = window
+        .app_handle()
+        .state::<SidebarState>()
+        .is_locked(window.label());
+    let edge = window
+        .app_handle()
+        .state::<SidebarState>()
+        .game_edge(window.label());
+    let overlay_edge = window
+        .app_handle()
+        .state::<SidebarState>()
+        .game_overlay(window.label());
+    let automatic = window
+        .app_handle()
+        .state::<SidebarState>()
+        .is_automatic(window.label());
+    let keep = window
+        .app_handle()
+        .state::<SidebarState>()
+        .game_keep_w(window.label());
+    let hug_allowed = window
+        .app_handle()
+        .state::<SidebarState>()
+        .auto_hug_allowed(window.label());
+    let hug_busy = window
+        .app_handle()
+        .state::<SidebarState>()
+        .hug_busy(window.label());
+    let last_hug = window
+        .app_handle()
+        .state::<SidebarState>()
+        .last_hug_phys_w(window.label());
+    let wiki_open = window
+        .app_handle()
+        .state::<SidebarState>()
+        .wiki_is_open(window.label());
+    let about_open = window
+        .app_handle()
+        .state::<SidebarState>()
+        .about_is_open(window.label());
+    let options_open = window
+        .app_handle()
+        .state::<SidebarState>()
+        .options_is_open(window.label());
+    let wiki_panel = window
+        .app_handle()
+        .state::<SidebarState>()
+        .wiki_panel_w(window.label());
+    let wiki_outside = window
+        .app_handle()
+        .state::<SidebarState>()
+        .is_wiki_outside(window.label());
+    let tray = window
+        .app_handle()
+        .state::<SidebarState>()
+        .is_tray_enabled();
     let tray_icon = window.app_handle().tray_by_id("pake-tray").is_some();
-    let dpr = window.app_handle().state::<SidebarState>().game_dpr(window.label());
+    let dpr = window
+        .app_handle()
+        .state::<SidebarState>()
+        .game_dpr(window.label());
     let persist = crate::app::window::persisted_window_state_path(window.app_handle())
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "none".into());
@@ -1741,8 +1763,11 @@ pub fn gbf_new_window(app: AppHandle) -> Result<String, String> {
                 let host = window.as_ref().window();
                 let mut labels: Vec<String> = app.windows().keys().cloned().collect();
                 labels.sort();
-                let webviews: Vec<String> =
-                    host.webviews().iter().map(|w| w.label().to_string()).collect();
+                let webviews: Vec<String> = host
+                    .webviews()
+                    .iter()
+                    .map(|w| w.label().to_string())
+                    .collect();
                 format!("opened={opened} windows()={labels:?} webviews={webviews:?}")
             }
             Err(error) => format!("open_additional_window ERR {error}"),
@@ -1856,9 +1881,18 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
     let label = window.label().to_string();
     let was_open = app.state::<SidebarState>().wiki_is_open(&label);
 
+    // Automatic Resizing has no panels: they tile the game, and under
+    // Automatic we never resize the window to make room. Opening is refused
+    // with a notice; closing still works so a panel left open by a mode
+    // switch can always be shut.
+    if !was_open && app.state::<SidebarState>().is_automatic(&label) {
+        return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
+    }
+
     if was_open {
         app.state::<SidebarState>().set_wiki_open(&label, false);
-        app.state::<SidebarState>().restore_collapse_for_panel(&label);
+        app.state::<SidebarState>()
+            .restore_collapse_for_panel(&label);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let handle = app.clone();
         let win_label = label.clone();
@@ -1904,7 +1938,9 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
         let report = match handle.get_window(&win_label) {
             Some(host) => match prepare_wiki_open(&host) {
                 Ok(note) => {
-                    handle.state::<SidebarState>().set_wiki_open(&win_label, true);
+                    handle
+                        .state::<SidebarState>()
+                        .set_wiki_open(&win_label, true);
                     let mut out = lock_report.clone();
                     out.push_str(&note);
                     if let Some(w) = wiki_webview(&host) {
@@ -1920,7 +1956,9 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
                     out
                 }
                 Err(notice) => {
-                    handle.state::<SidebarState>().restore_collapse_for_panel(&win_label);
+                    handle
+                        .state::<SidebarState>()
+                        .restore_collapse_for_panel(&win_label);
                     let mut out = lock_report.clone();
                     out.push_str(&apply_panel_lock(&host, false));
                     out.push_str("REFUSE ");
@@ -1940,7 +1978,11 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
     let opened = app.state::<SidebarState>().wiki_is_open(&label);
     if !opened {
-        return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| panel_no_room_notice(true)));
+        return Err(report
+            .lines()
+            .find(|l| l.starts_with("REFUSE "))
+            .map(|l| l[7..].to_string())
+            .unwrap_or_else(|| panel_no_room_notice(true)));
     }
     Ok(format!("wikiOpen=true\n{report}"))
 }
@@ -1954,9 +1996,18 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
     let label = window.label().to_string();
     let was_open = app.state::<SidebarState>().about_is_open(&label);
 
+    // Automatic Resizing has no panels: they tile the game, and under
+    // Automatic we never resize the window to make room. Opening is refused
+    // with a notice; closing still works so a panel left open by a mode
+    // switch can always be shut.
+    if !was_open && app.state::<SidebarState>().is_automatic(&label) {
+        return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
+    }
+
     if was_open {
         app.state::<SidebarState>().set_about_open(&label, false);
-        app.state::<SidebarState>().restore_collapse_for_panel(&label);
+        app.state::<SidebarState>()
+            .restore_collapse_for_panel(&label);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let handle = app.clone();
         let win_label = label.clone();
@@ -2002,14 +2053,18 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
         let report = match handle.get_window(&win_label) {
             Some(host) => match prepare_about_open(&host) {
                 Ok(note) => {
-                    handle.state::<SidebarState>().set_about_open(&win_label, true);
+                    handle
+                        .state::<SidebarState>()
+                        .set_about_open(&win_label, true);
                     let mut out = lock_report.clone();
                     out.push_str(&note);
                     out.push_str(&layout_verbose(&host));
                     out
                 }
                 Err(notice) => {
-                    handle.state::<SidebarState>().restore_collapse_for_panel(&win_label);
+                    handle
+                        .state::<SidebarState>()
+                        .restore_collapse_for_panel(&win_label);
                     let mut out = lock_report.clone();
                     out.push_str(&apply_panel_lock(&host, false));
                     out.push_str("REFUSE ");
@@ -2029,7 +2084,11 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
     let opened = app.state::<SidebarState>().about_is_open(&label);
     if !opened {
-        return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| panel_no_room_notice(true)));
+        return Err(report
+            .lines()
+            .find(|l| l.starts_with("REFUSE "))
+            .map(|l| l[7..].to_string())
+            .unwrap_or_else(|| panel_no_room_notice(true)));
     }
     Ok(format!("aboutOpen=true\n{report}"))
 }
@@ -2041,9 +2100,18 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
     let label = window.label().to_string();
     let was_open = app.state::<SidebarState>().options_is_open(&label);
 
+    // Automatic Resizing has no panels: they tile the game, and under
+    // Automatic we never resize the window to make room. Opening is refused
+    // with a notice; closing still works so a panel left open by a mode
+    // switch can always be shut.
+    if !was_open && app.state::<SidebarState>().is_automatic(&label) {
+        return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
+    }
+
     if was_open {
         app.state::<SidebarState>().set_options_open(&label, false);
-        app.state::<SidebarState>().restore_collapse_for_panel(&label);
+        app.state::<SidebarState>()
+            .restore_collapse_for_panel(&label);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let handle = app.clone();
         let win_label = label.clone();
@@ -2089,14 +2157,18 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
         let report = match handle.get_window(&win_label) {
             Some(host) => match prepare_options_open(&host) {
                 Ok(note) => {
-                    handle.state::<SidebarState>().set_options_open(&win_label, true);
+                    handle
+                        .state::<SidebarState>()
+                        .set_options_open(&win_label, true);
                     let mut out = lock_report.clone();
                     out.push_str(&note);
                     out.push_str(&layout_verbose(&host));
                     out
                 }
                 Err(notice) => {
-                    handle.state::<SidebarState>().restore_collapse_for_panel(&win_label);
+                    handle
+                        .state::<SidebarState>()
+                        .restore_collapse_for_panel(&win_label);
                     let mut out = lock_report.clone();
                     out.push_str(&apply_panel_lock(&host, false));
                     out.push_str("REFUSE ");
@@ -2116,7 +2188,11 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
     let opened = app.state::<SidebarState>().options_is_open(&label);
     if !opened {
-        return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| panel_no_room_notice(true)));
+        return Err(report
+            .lines()
+            .find(|l| l.starts_with("REFUSE "))
+            .map(|l| l[7..].to_string())
+            .unwrap_or_else(|| panel_no_room_notice(true)));
     }
     Ok(format!("optionsOpen=true\n{report}"))
 }
@@ -2191,7 +2267,10 @@ pub fn on_game_page_finished(webview: &Webview, url: &Url) {
 /// its document on each navigation and takes our style element with it.
 pub fn reapply_lock(webview: &Webview) {
     let label = webview.window().label().to_string();
-    let locked = webview.app_handle().state::<SidebarState>().is_locked(&label);
+    let locked = webview
+        .app_handle()
+        .state::<SidebarState>()
+        .is_locked(&label);
     if let Err(error) = webview.eval(lock_js(locked)) {
         eprintln!("[Pake][gbf] could not reapply locked mode: {error}");
     }
@@ -2281,7 +2360,8 @@ pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
 pub fn gbf_set_wiki_outside(window: Window, outside: bool) -> Result<String, String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
-    app.state::<SidebarState>().set_wiki_outside(&label, outside);
+    app.state::<SidebarState>()
+        .set_wiki_outside(&label, outside);
     persist_layout_state(&app);
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -2369,14 +2449,9 @@ pub fn gbf_game_edge(
                 let prev_auto = state.is_automatic(&win_label);
                 state.set_game_edge(&win_label, pending_right);
                 state.set_game_overlay(&win_label, pending_overlay);
-                if state.hug_if_game_size_changed(
-                    &win_label,
-                    prev_edge,
-                    pending_right,
-                    prev_auto,
-                    true,
-                ) {
-                    schedule_size_full_hug(app.clone(), win_label.clone());
+                state.note_game_size_change(&win_label, prev_edge, pending_right, true);
+                if !prev_auto {
+                    close_panels_for_automatic(&app, &win_label);
                 }
                 if let Some(host) = app.get_window(&win_label) {
                     let _ = layout(&host);
@@ -2397,8 +2472,9 @@ pub fn gbf_game_edge(
     }
     state.set_game_edge(&label, right);
     state.set_game_overlay(&label, overlay);
-    if state.hug_if_game_size_changed(&label, current_edge, right, prev_auto, automatic) {
-        schedule_size_full_hug(app.clone(), label.clone());
+    state.note_game_size_change(&label, current_edge, right, automatic);
+    if automatic && !prev_auto {
+        close_panels_for_automatic(&app, &label);
     }
     if dpr_first || overlay_changed {
         // Automatic lock: leftover is grow room until GBF hits its cap.

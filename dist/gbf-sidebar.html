@@ -106,6 +106,29 @@
   body.collapsed #foot { display: none; }
   body.collapsed #top { justify-content: center; padding: 8px 0; }
   body.collapsed .btn { justify-content: center; padding: 8px 0; }
+  /* Transient notice, e.g. a panel asked for under Automatic Resizing.
+     Sits over the nav so a deliberate click gets a deliberate answer --
+     the footer is where diagnostics go, and it is too quiet for this. */
+  #notice {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: 34px;
+    z-index: 40;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: #2a2f3a;
+    color: #e8eaf0;
+    border: 1px solid #3d4552;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+    line-height: 1.45;
+    opacity: 0;
+    transition: opacity 140ms ease;
+    pointer-events: none;
+  }
+  #notice.on { opacity: 1; }
+  body.collapsed #notice { display: none; }
 </style>
 
 <div id="top">
@@ -119,6 +142,7 @@
   <button class="wbtn" id="wclose" title="Close this panel">&#10005;</button>
 </div>
 <div id="nav"></div>
+<div id="notice" role="status" aria-live="polite"></div>
 <div id="foot">starting…</div>
 <pre id="dbg"></pre>
 
@@ -167,6 +191,22 @@
   function say(msg) {
     var f = document.getElementById("foot");
     if (f) f.textContent = String(msg).slice(0, 120);
+  }
+
+  // Transient on-screen notice. Collapsed rail has no room, so setState
+  // hides it there; the footer still carries the text.
+  var noticeTimer = 0;
+  function showNotice(msg) {
+    var n = document.getElementById("notice");
+    say(msg);
+    if (!n) return;
+    n.textContent = String(msg);
+    n.className = "on";
+    if (noticeTimer) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(function () {
+      n.className = "";
+      noticeTimer = 0;
+    }, 6000);
   }
 
   function invoke(cmd, args) {
@@ -219,6 +259,7 @@
       var s = document.createElement("div");
       s.className = "sec";
       s.textContent = item.section;
+      s.id = "sec-" + item.section.toLowerCase();
       nav.appendChild(s);
       return;
     }
@@ -244,7 +285,14 @@
       if (item.cmd) {
         say(item.label + "…");
         invoke(item.cmd, item.args || {})
-          .then(function (r) { say(item.label + " ok"); dump(r); })
+          .then(function (r) {
+            if (typeof r === "string" && r.indexOf("NOTICE ") === 0) {
+              showNotice(r.slice(7));
+              return;
+            }
+            say(item.label + " ok");
+            dump(r);
+          })
           .catch(function (e) { say(String(e && e.message ? e.message : e)); });
         return;
       }
@@ -300,7 +348,21 @@
       if (o) o.classList.toggle("active", !!st.optionsOpen);
       var l = document.getElementById("nav-lock");
       if (l) l.classList.toggle("active", !!st.locked);
+
+      // Automatic Resizing has no panels. The wiki needs width we are not
+      // allowed to take there, so its row goes away entirely. Options and
+      // About stay put -- Options is where the tray and layout settings
+      // live, and a row that silently vanishes reads as a bug -- but they
+      // explain themselves instead of opening. See PANEL_NEEDS_FIXED_SIZE.
+      var auto = !!st.automatic;
+      document.body.classList.toggle("automatic", auto);
+      var wikiRow = document.getElementById("nav-wiki");
+      if (wikiRow) wikiRow.hidden = auto;
+      var wikiSec = document.getElementById("sec-reference");
+      if (wikiSec) wikiSec.hidden = auto;
     },
+
+    notice: showNotice,
     // Kept so an older Rust build still works against this page.
     setCollapsed: function (on) {
       window.__gbfSidebar.setState({ collapsed: on });
