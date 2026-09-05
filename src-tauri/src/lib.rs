@@ -305,6 +305,9 @@ pub fn run_app() {
             app::sidebar::gbf_nav,
             app::sidebar::gbf_toggle_sidebar,
             app::sidebar::gbf_debug,
+            app::sidebar::gbf_wiki_toggle,
+            app::sidebar::gbf_wiki_back,
+            app::sidebar::gbf_wiki_home,
         ])
         .setup(move |app| {
             app.manage(MultiWindowState::new(

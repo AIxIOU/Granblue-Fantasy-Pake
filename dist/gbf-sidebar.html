@@ -48,6 +48,19 @@
     padding: 2px 5px; border-radius: 3px; white-space: nowrap;
   }
 
+  #wikibar {
+    display: flex; gap: 6px; padding: 6px 10px; flex: 0 0 auto;
+    border-bottom: 1px solid var(--line); background: #10131a;
+  }
+  #wikibar[hidden] { display: none; }
+  .wbtn {
+    flex: 1 1 auto; padding: 4px 0;
+    background: none; border: 1px solid var(--line); border-radius: 5px;
+    color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .wbtn:hover { background: var(--bg-hover); border-color: var(--accent); }
+  body.collapsed #wikibar { display: none; }
+
   /* The only scrolling region. */
   #nav { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 6px 0; }
   #nav::-webkit-scrollbar { width: 8px; }
@@ -64,6 +77,7 @@
     font: inherit; text-align: left; cursor: pointer; white-space: nowrap;
   }
   .btn:hover { background: var(--bg-hover); color: #fff; }
+  .btn.active { background: var(--bg-hover); color: #fff; box-shadow: inset 2px 0 0 var(--accent); }
   .btn .ico { width: 18px; flex: 0 0 auto; text-align: center; font-size: 14px; }
   .btn .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .btn .key { color: var(--fg-dim); font-size: 10px; }
@@ -99,6 +113,11 @@
   <span id="brand">Granblue</span>
   <span id="badge">NATIVE</span>
 </div>
+<div id="wikibar" hidden>
+  <button class="wbtn" id="wback" title="Back in the wiki">&#8592;</button>
+  <button class="wbtn" id="whome" title="Wiki front page">&#8962;</button>
+  <button class="wbtn" id="wclose" title="Close the wiki (Alt+W)">&#10005;</button>
+</div>
 <div id="nav"></div>
 <div id="foot">starting…</div>
 <pre id="dbg"></pre>
@@ -128,7 +147,12 @@
     { label: "Alchemy Lab",   hash: "#frontier/alchemy/top",     icon: "⚗", key: "=" },
     { label: "Trial Battles", hash: "#trial_battle",             icon: "⚔", key: "[" },
     { label: "Casino",        hash: "#casino",                   icon: "♠", key: "]" },
-    { label: "Gacha",         hash: "#gacha",                    icon: "❈", key: ";" }
+    { label: "Gacha",         hash: "#gacha",                    icon: "❈", key: ";" },
+
+    { section: "Reference" },
+    // Not a Granblue hash. Opens the wiki, which is its own webview pointed
+    // straight at gbf.wiki -- a real page, not an iframe.
+    { label: "Wiki", cmd: "gbf_wiki_toggle", id: "nav-wiki", icon: "⊞", key: "W" }
   ];
 
   // This webview is not exposed as a CDP target, so its console cannot be read
@@ -155,7 +179,8 @@
     var d = document.getElementById("dbg");
     if (!d) return;
     d.textContent = String(text);
-    d.className = "on";
+    // Click the footer to show it; it covers the nav otherwise.
+    d.className = "";
   }
 
   function refreshDebug() {
@@ -168,8 +193,16 @@
     var t = window.__TAURI__;
     if (!t) { say("NO __TAURI__ global"); return; }
     if (!t.core || !t.core.invoke) { say("__TAURI__: " + Object.keys(t).join(",")); return; }
-    say("ipc ready");
+    say("ipc ready — click here for diagnostics");
     refreshDebug();
+    var f = document.getElementById("foot");
+    if (f) {
+      f.style.cursor = "pointer";
+      f.addEventListener("click", function () {
+        var d = document.getElementById("dbg");
+        if (d) d.className = d.className === "on" ? "" : "on";
+      });
+    }
   })();
 
   var nav = document.getElementById("nav");
@@ -198,13 +231,33 @@
     b.appendChild(lbl);
     b.appendChild(key);
 
+    if (item.id) b.id = item.id;
     b.addEventListener("click", function () {
+      if (item.cmd) {
+        say(item.label + "…");
+        invoke(item.cmd)
+          .then(function (r) { say(item.label + " ok"); dump(r); })
+          .catch(function (e) { say(String(e && e.message ? e.message : e)); });
+        return;
+      }
       say("nav " + item.label + "…");
       invoke("gbf_nav", { hash: item.hash })
         .then(function () { say("nav ok: " + item.label); })
         .catch(function (e) { say("nav FAILED: " + (e && e.message ? e.message : e)); });
     });
     nav.appendChild(b);
+  });
+
+  document.getElementById("wback").addEventListener("click", function () {
+    invoke("gbf_wiki_back").catch(function (e) { say(String(e)); });
+  });
+  document.getElementById("whome").addEventListener("click", function () {
+    invoke("gbf_wiki_home").catch(function (e) { say(String(e)); });
+  });
+  document.getElementById("wclose").addEventListener("click", function () {
+    invoke("gbf_wiki_toggle")
+      .then(dump)
+      .catch(function (e) { say(String(e && e.message ? e.message : e)); });
   });
 
   document.getElementById("toggle").addEventListener("click", function () {
@@ -216,9 +269,20 @@
 
   // Rust owns the collapsed flag and pushes it here after every relayout, so
   // there is only ever one source of truth for it.
+  // Rust owns both flags and pushes them here after every relayout, so there
+  // is only ever one source of truth for them.
   window.__gbfSidebar = {
+    setState: function (st) {
+      st = st || {};
+      document.body.classList.toggle("collapsed", !!st.collapsed);
+      var bar = document.getElementById("wikibar");
+      if (bar) bar.hidden = !st.wikiOpen;
+      var w = document.getElementById("nav-wiki");
+      if (w) w.classList.toggle("active", !!st.wikiOpen);
+    },
+    // Kept so an older Rust build still works against this page.
     setCollapsed: function (on) {
-      document.body.classList.toggle("collapsed", !!on);
+      window.__gbfSidebar.setState({ collapsed: on });
     }
   };
 
@@ -229,6 +293,13 @@
     if (e.key === "l" || e.key === "L") {
       e.preventDefault();
       invoke("gbf_toggle_sidebar").catch(function () {});
+      return;
+    }
+    if (e.key === "w" || e.key === "W") {
+      e.preventDefault();
+      invoke("gbf_wiki_toggle")
+        .then(dump)
+        .catch(function (er) { say(String(er && er.message ? er.message : er)); });
       return;
     }
     var hit = null;
