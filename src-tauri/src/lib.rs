@@ -30,7 +30,7 @@ use app::{
         clear_dock_badge, download_file, increment_dock_badge, send_notification, set_dock_badge,
         set_dock_badge_label, set_zoom, update_theme_mode, webview_navigate,
     },
-    setup::{set_global_shortcut, set_system_tray},
+    setup::{set_global_shortcut, set_system_tray, TrayRuntime},
     window::{
         reapply_window_icon, reveal_built_window, set_window, MultiWindowState,
     },
@@ -198,11 +198,11 @@ pub fn run_app() {
     let (pake_config, tauri_config) = get_pake_config();
     let tauri_app = tauri::Builder::default();
 
-    let show_system_tray = pake_config.show_system_tray();
     let hide_on_close = pake_config.windows[0].hide_on_close;
     let activation_shortcut = pake_config.windows[0].activation_shortcut.clone();
     let init_fullscreen = pake_config.windows[0].fullscreen;
-    let start_to_tray = pake_config.windows[0].start_to_tray && show_system_tray; // Only valid when tray is enabled
+    let want_start_to_tray = pake_config.windows[0].start_to_tray;
+    let tray_icon_path = pake_config.system_tray_path.clone();
     let multi_instance = pake_config.multi_instance;
     let multi_window = pake_config.multi_window;
     let _enable_find = pake_config.windows[0].enable_find;
@@ -269,7 +269,12 @@ pub fn run_app() {
             }
 
             if label == "pake" {
-                if start_to_tray {
+                if want_start_to_tray
+                    && webview
+                        .app_handle()
+                        .state::<app::sidebar::SidebarState>()
+                        .is_tray_enabled()
+                {
                     return;
                 }
                 if let Some(window) = webview.app_handle().get_window("pake") {
@@ -316,6 +321,7 @@ pub fn run_app() {
             app::sidebar::gbf_wiki_home,
             app::sidebar::gbf_toggle_lock,
             app::sidebar::gbf_set_wiki_outside,
+            app::setup::gbf_set_tray,
             app::sidebar::gbf_game_edge,
             app::sidebar::gbf_new_window,
         ])
@@ -325,6 +331,15 @@ pub fn run_app() {
                 tauri_config.clone(),
             ));
             app.manage(app::sidebar::SidebarState::default());
+            let tray_on = app::sidebar::restore_layout_tray(app.app_handle());
+            app.state::<app::sidebar::SidebarState>()
+                .set_tray_enabled(tray_on);
+            app.manage(TrayRuntime {
+                icon_path: tray_icon_path.clone(),
+                init_fullscreen,
+                multi_window,
+                startup_revealed: startup_window_revealed.clone(),
+            });
 
             // --- Menu Construction Start ---
             #[cfg(target_os = "macos")]
@@ -348,8 +363,8 @@ pub fn run_app() {
             }
             set_system_tray(
                 app.app_handle(),
-                show_system_tray,
-                &pake_config.system_tray_path,
+                tray_on,
+                &tray_icon_path,
                 init_fullscreen,
                 multi_window,
                 startup_window_revealed.clone(),
@@ -364,7 +379,7 @@ pub fn run_app() {
             // Show window after state restoration to prevent position flashing
             // once its first page finishes. A fallback keeps offline or stalled
             // pages reachable without exposing a blank webview during normal startup.
-            if !start_to_tray {
+            if !(want_start_to_tray && tray_on) {
                 let window_clone = window.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(
@@ -382,7 +397,13 @@ pub fn run_app() {
         })
         .on_window_event(move |_window, _event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                if hide_on_close && _window.label() == "pake" {
+                if hide_on_close
+                    && _window.label() == "pake"
+                    && _window
+                        .app_handle()
+                        .state::<app::sidebar::SidebarState>()
+                        .is_tray_enabled()
+                {
                     // User dismissed the window; do not let startup reveal reopen it.
                     cancel_startup_reveal(&close_revealed);
                     // Save before hide: CloseRequested never reaches Destroyed, and

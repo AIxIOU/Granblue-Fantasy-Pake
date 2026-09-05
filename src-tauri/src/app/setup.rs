@@ -48,7 +48,7 @@ pub fn set_system_tray(
 
     let menu_revealed = startup_revealed.clone();
     let click_revealed = startup_revealed;
-    let mut tray_builder = TrayIconBuilder::new()
+    let mut tray_builder = TrayIconBuilder::with_id("pake-tray")
         .menu(&menu)
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "tray_new_window" => {
@@ -113,6 +113,68 @@ pub fn set_system_tray(
 
     tray.set_icon_as_template(false)?;
     Ok(())
+}
+
+/// Values `gbf_set_tray` needs to rebuild the tray after startup.
+#[derive(Clone)]
+pub struct TrayRuntime {
+    pub icon_path: String,
+    pub init_fullscreen: bool,
+    pub multi_window: bool,
+    pub startup_revealed: Arc<AtomicBool>,
+}
+
+/// Show or hide the system tray. Off by default; closing the window then quits.
+#[tauri::command]
+pub fn gbf_set_tray(app: AppHandle, on: bool) -> Result<String, String> {
+    app.state::<crate::app::sidebar::SidebarState>()
+        .set_tray_enabled(on);
+    crate::app::sidebar::persist_layout_state(&app);
+
+    let (icon_path, init_fullscreen, multi_window, startup_revealed) = {
+        let rt = app.state::<TrayRuntime>();
+        (
+            rt.icon_path.clone(),
+            rt.init_fullscreen,
+            rt.multi_window,
+            rt.startup_revealed.clone(),
+        )
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let report = match set_system_tray(
+            &handle,
+            on,
+            &icon_path,
+            init_fullscreen,
+            multi_window,
+            startup_revealed,
+        ) {
+            Ok(()) => {
+                if let Some(host) = handle.get_window("pake") {
+                    let _ = crate::app::sidebar::layout(&host);
+                }
+                format!(
+                    "tray={on} tray_icon={}",
+                    handle.tray_by_id("pake-tray").is_some()
+                )
+            }
+            Err(error) => format!("tray ERR {error}"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    if report.starts_with("tray ERR") {
+        Err(report)
+    } else {
+        Ok(report)
+    }
 }
 
 pub fn set_global_shortcut(

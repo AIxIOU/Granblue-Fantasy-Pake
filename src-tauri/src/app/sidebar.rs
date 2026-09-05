@@ -50,6 +50,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{
     webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalSize, Url,
@@ -112,6 +113,10 @@ struct SavedLayout {
     /// Wiki sits to the right of the sidebar. False = between game and sidebar.
     #[serde(default)]
     wiki_outside: bool,
+    /// System tray icon. Process-wide; stored on each window entry.
+    /// Default false: no tray, and closing the window quits.
+    #[serde(default)]
+    tray: bool,
 }
 
 fn layout_state_path(app: &AppHandle) -> Option<PathBuf> {
@@ -145,6 +150,7 @@ pub fn persist_layout_state(app: &AppHandle) {
             SavedLayout {
                 locked: sidebar.is_locked(label),
                 wiki_outside: sidebar.is_wiki_outside(label),
+                tray: sidebar.is_tray_enabled(),
             },
         );
     }
@@ -172,6 +178,16 @@ fn restore_layout_wiki_outside(app: &AppHandle, label: &str) -> bool {
     load_layout_states(app)
         .get(label)
         .map(|s| s.wiki_outside)
+        .unwrap_or(false)
+}
+
+/// Tray is process-wide. Prefer the main window's saved flag; else any entry.
+pub fn restore_layout_tray(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.tray)
+        .or_else(|| states.values().next().map(|s| s.tray))
         .unwrap_or(false)
 }
 
@@ -225,6 +241,8 @@ struct WindowFlags {
 #[derive(Default)]
 pub struct SidebarState {
     by_window: Mutex<HashMap<String, WindowFlags>>,
+    /// Process-wide. Not per `--multi-window` clone.
+    tray: AtomicBool,
 }
 
 impl SidebarState {
@@ -236,6 +254,14 @@ impl SidebarState {
     fn update(&self, label: &str, f: impl FnOnce(&mut WindowFlags)) {
         let mut map = self.by_window.lock().unwrap_or_else(|e| e.into_inner());
         f(map.entry(label.to_string()).or_default());
+    }
+
+    pub fn is_tray_enabled(&self) -> bool {
+        self.tray.load(Ordering::Relaxed)
+    }
+
+    pub fn set_tray_enabled(&self, on: bool) {
+        self.tray.store(on, Ordering::Relaxed);
     }
 
     pub fn is_collapsed(&self, label: &str) -> bool {
@@ -1054,6 +1080,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let locked = state.is_locked(&label);
     let automatic = state.is_automatic(&label);
     let outside = state.is_wiki_outside(&label);
+    let tray = state.is_tray_enabled();
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
@@ -1201,7 +1228,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                 out.push_str(&format!("options hide={}\n", result_word(&options.hide())));
             }
             let e = options.eval(format!(
-                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside}}})"
+                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray}}})"
             ));
             out.push_str(&format!("options eval={}\n", result_word(&e)));
         }
@@ -1405,6 +1432,8 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let options_open = window.app_handle().state::<SidebarState>().options_is_open(window.label());
     let wiki_panel = window.app_handle().state::<SidebarState>().wiki_panel_w(window.label());
     let wiki_outside = window.app_handle().state::<SidebarState>().is_wiki_outside(window.label());
+    let tray = window.app_handle().state::<SidebarState>().is_tray_enabled();
+    let tray_icon = window.app_handle().tray_by_id("pake-tray").is_some();
     let persist = crate::app::window::persisted_window_state_path(window.app_handle())
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "none".into());
@@ -1414,7 +1443,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let monitor = monitor_inner_ceiling(&window);
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),

@@ -34,8 +34,8 @@
   },
   "system_tray": {
     "macos": false,
-    "linux": true,
-    "windows": true
+    "linux": false,
+    "windows": false
   },
   "system_tray_path": "icons/icon.png",
   "inject": [],

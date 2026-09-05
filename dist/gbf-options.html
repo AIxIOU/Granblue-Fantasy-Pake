@@ -74,6 +74,13 @@
     <b>Outside</b>
     <span>Game, then the sidebar, then the panel on the outer edge.</span>
   </button>
+
+  <h2>Desktop</h2>
+  <button type="button" class="choice" id="opt-tray">
+    <b>System tray</b>
+    <span>Icon in the notification area. Off by default. With it off,
+    closing the window quits.</span>
+  </button>
 </div>
 <script>
   function invoke(cmd, args) {
@@ -81,20 +88,26 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside) {
+  function paint(outside, tray) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
+    document.getElementById("opt-tray").classList.toggle("on", !!tray);
   }
+  var trayOn = false;
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn); });
+  });
+  document.getElementById("opt-tray").addEventListener("click", function () {
+    invoke("gbf_set_tray", { on: !trayOn });
   });
   window.__gbfOptions = {
     setState: function (st) {
       st = st || {};
-      paint(!!st.wikiOutside);
+      trayOn = !!st.tray;
+      paint(!!st.wikiOutside, trayOn);
     }
   };
 </script>
