@@ -186,8 +186,8 @@
     var d = document.getElementById("dbg");
     if (!d) return;
     d.textContent = String(text);
-    // Show it. The footer click still toggles `.on` if it is in the way.
-    d.className = "on";
+    // Do not force the overlay on. It sits over the nav and hid the last
+    // items. Footer click still toggles it.
   }
 
   function refreshDebug() {
