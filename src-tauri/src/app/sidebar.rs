@@ -235,6 +235,9 @@ struct WindowFlags {
     auto_switch_hug_due: bool,
     /// Cancels a pending switch hug if the Size changes again first.
     auto_switch_gen: u64,
+    /// Physical inner width of our last hug. Only used to recognise that
+    /// hug's own Resized echo so it is not mistaken for a player drag.
+    last_hug_phys_w: u32,
     /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
     hug_gen: u64,
     /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
@@ -430,6 +433,10 @@ impl SidebarState {
         self.update(label, |f| f.auto_switch_hug_due = on);
     }
 
+    fn set_last_hug_phys_w(&self, label: &str, w: u32) {
+        self.update(label, |f| f.last_hug_phys_w = w);
+    }
+
     fn take_auto_switch_hug_due(&self, label: &str) -> bool {
         let mut out = false;
         self.update(label, |f| {
@@ -548,16 +555,28 @@ impl SidebarState {
     }
 
     /// A drag while a panel is open means we must not restore the borrowed
-    /// width. Nothing else: under Automatic a user drag arms no hug at all,
-    /// because any window resize we make sends GBF re-fitting smaller.
-    pub fn note_user_resize(&self, label: &str) {
+    /// width. A drag also cancels any pending Automatic flush hug: the player
+    /// has said where they want the edge, and a hug still counting down from
+    /// a Size switch would otherwise snap the drag back (measured: switch to
+    /// Full, drag to 1800, hug pulled it to 636).
+    ///
+    /// A user drag arms no hug of its own -- any resize we make under
+    /// Automatic sends GBF re-fitting smaller.
+    pub fn note_user_resize(&self, label: &str, phys_w: u32) {
         self.update(label, |f| {
             if f.hug_busy {
                 return;
             }
+            // Our own hug's Resized echo is not a drag.
+            if f.last_hug_phys_w != 0 && phys_w.abs_diff(f.last_hug_phys_w) <= 8 {
+                return;
+            }
+            f.last_hug_phys_w = 0;
             if f.wiki_open || f.about_open || f.options_open {
                 f.panel_user_resized = true;
             }
+            f.auto_switch_hug_due = false;
+            f.auto_switch_gen = f.auto_switch_gen.wrapping_add(1);
         });
     }
 
@@ -806,6 +825,7 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     }
     state.save_hug_width_once(&label, inner_w);
     state.set_hug_busy(&label, true);
+    state.set_last_hug_phys_w(&label, want_phys);
     if let Err(e) = host.set_size(PhysicalSize::new(want_phys, phys.height)) {
         state.set_hug_busy(&label, false);
         return Err(e);
@@ -813,56 +833,80 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     Ok(true)
 }
 
-/// Fixed Size -> Automatic leaves a dead strip: the window keeps the fixed
-/// size's width while GBF drops to whatever it fits at (measured Large -> Full:
-/// window 997, wrap 388, 285px of nothing right of the sidebar). Wait for
-/// #wrapper to stop moving, then hug the right edge to the sidebar exactly
-/// once. GBF may re-fit smaller after that hug; we do not chase it, because
-/// chasing is the walk-down this suite exists to prevent.
-fn schedule_switch_to_automatic_hug(app: &AppHandle, label: &str) {
+/// Close the dead strip between the sidebar and the window's right edge under
+/// Automatic. Armed by the two things that open one: a fixed Size -> Automatic
+/// switch (the window keeps the fixed width while GBF drops to what it fits at
+/// -- measured Large -> Full: window 997, wrap 388, 285px of nothing), and a
+/// sidebar collapse/expand (the rail changes width under a window that does
+/// not).
+///
+/// Not armed by a player drag, and cancelled by one -- see `note_user_resize`.
+///
+/// Hug the right edge onto the sidebar, then let GBF settle and hug again if it
+/// re-fitted smaller, until the edge actually sits on the sidebar. Measured to
+/// terminate after two hugs at window 636 / wrap 320 -- which is exactly Small's
+/// flush geometry, so GBF has nothing left to re-fit and the third round is a
+/// no-op. `ROUNDS` is a hard stop so this can never become a walk-down: if it
+/// has not converged by then we leave the window alone rather than keep taking
+/// game size away.
+fn schedule_automatic_flush_hug(app: &AppHandle, label: &str) {
+    const ROUNDS: usize = 3;
     let gen = app.state::<SidebarState>().bump_auto_switch_gen(label);
     let app = app.clone();
     let label = label.to_string();
     std::thread::spawn(move || {
-        let mut last = -1.0_f64;
-        let mut stable: u32 = 0;
-        for _ in 0..25 {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            let state = app.state::<SidebarState>();
-            if state.auto_switch_gen(&label) != gen {
+        for _round in 0..ROUNDS {
+            // Wait for #wrapper to stop moving before measuring anything.
+            let mut last = -1.0_f64;
+            let mut stable: u32 = 0;
+            let mut settled = false;
+            for _ in 0..25 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                let state = app.state::<SidebarState>();
+                if state.auto_switch_gen(&label) != gen {
+                    return;
+                }
+                if !state.is_locked(&label) || !state.is_automatic(&label) {
+                    return;
+                }
+                let edge = state.game_edge(&label);
+                if edge > 1.0 && (edge - last).abs() < 20.0 {
+                    stable += 1;
+                } else {
+                    stable = 0;
+                }
+                last = edge;
+                if stable >= 5 {
+                    settled = true;
+                    break;
+                }
+            }
+            if !settled {
                 return;
             }
-            if !state.is_locked(&label) || !state.is_automatic(&label) {
-                return;
-            }
-            let edge = state.game_edge(&label);
-            if edge > 1.0 && (edge - last).abs() < 20.0 {
-                stable += 1;
-            } else {
-                stable = 0;
-            }
-            last = edge;
-            if stable >= 5 {
-                break;
-            }
+            let app_main = app.clone();
+            let round_label = label.clone();
+            let _ = app.run_on_main_thread(move || {
+                let state = app_main.state::<SidebarState>();
+                if state.auto_switch_gen(&round_label) != gen {
+                    return;
+                }
+                if !state.is_locked(&round_label) || !state.is_automatic(&round_label) {
+                    return;
+                }
+                // Arm for exactly this relayout. Dropped straight after so a
+                // later, unrelated layout can never hug behind the player.
+                state.set_auto_switch_hug_due(&round_label, true);
+                if let Some(host) = app_main.get_window(&round_label) {
+                    let _ = layout(&host);
+                }
+                state.set_auto_switch_hug_due(&round_label, false);
+            });
+            // Give the hug's Resized and GBF's reaction time to land before the
+            // next round measures. Already flush means the next round's hug is
+            // inside HUG_SLACK and does nothing.
+            std::thread::sleep(std::time::Duration::from_millis(700));
         }
-        let app_main = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let state = app_main.state::<SidebarState>();
-            if state.auto_switch_gen(&label) != gen {
-                return;
-            }
-            if !state.is_locked(&label) || !state.is_automatic(&label) {
-                return;
-            }
-            state.set_auto_switch_hug_due(&label, true);
-            if let Some(host) = app_main.get_window(&label) {
-                let _ = layout(&host);
-            }
-            // One shot: if layout did not spend it, drop it so a later
-            // relayout cannot hug behind the player's back.
-            state.set_auto_switch_hug_due(&label, false);
-        });
     });
 }
 
@@ -1473,7 +1517,9 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
         WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
             let state = on_resize.app_handle().state::<SidebarState>();
             let label = on_resize.label().to_string();
-            state.note_user_resize(&label);
+            if let Ok(phys) = on_resize.inner_size() {
+                state.note_user_resize(&label, phys.width);
+            }
             if let Err(error) = layout(&on_resize) {
                 eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
             }
@@ -1525,6 +1571,12 @@ pub fn gbf_toggle_sidebar(window: Window) -> Result<String, String> {
                 if snap_css(&state, &label) > 1.0 {
                     // Snap column (lock or unlocked overlay): hug to the new rail.
                     state.set_panel_hug_due(&label, true);
+                    if state.is_automatic(&label) {
+                        // Under Automatic the ordinary hug path is a no-op, so
+                        // the rail delta would be left as empty window. Arm the
+                        // flush hug instead; it converges and stops.
+                        schedule_automatic_flush_hug(&handle, &label);
+                    }
                 } else {
                     // Tiled: keep the game column, grow/shrink the OS window
                     // by the rail delta so Automatic leftover is removed
@@ -2376,7 +2428,7 @@ pub fn gbf_game_edge(
                 state.note_game_size_change(&win_label, prev_edge, pending_right, true);
                 if !prev_auto {
                     close_panels_for_automatic(&app, &win_label);
-                    schedule_switch_to_automatic_hug(&app, &win_label);
+                    schedule_automatic_flush_hug(&app, &win_label);
                 }
                 if let Some(host) = app.get_window(&win_label) {
                     let _ = layout(&host);
@@ -2400,7 +2452,7 @@ pub fn gbf_game_edge(
     state.note_game_size_change(&label, current_edge, right, automatic);
     if automatic && !prev_auto {
         close_panels_for_automatic(&app, &label);
-        schedule_switch_to_automatic_hug(&app, &label);
+        schedule_automatic_flush_hug(&app, &label);
     }
     if dpr_first || overlay_changed {
         // Automatic lock: leftover is grow room until GBF hits its cap.
