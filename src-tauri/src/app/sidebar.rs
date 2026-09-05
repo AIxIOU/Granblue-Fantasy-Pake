@@ -229,6 +229,16 @@ struct WindowFlags {
     hug_busy: bool,
     /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`).
     automatic: bool,
+    /// Granblue served its mobile client (no `#submenu` column). The mobile
+    /// client is a fixed 320 CSS layout that never re-fits and never reloads
+    /// on resize, and it has no Window Size settings at all.
+    mobile: bool,
+    /// Page zoom we last applied to the game webview. 1.0 = untouched.
+    page_zoom: f64,
+    /// Physical inner width of the last resize WE performed. Its `Resized`
+    /// event must not be mistaken for the player dragging the frame -- doing so
+    /// marks the panel width-borrow as user-owned and it is never given back.
+    last_set_phys_w: u32,
     /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
     hug_gen: u64,
     /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
@@ -396,6 +406,27 @@ impl SidebarState {
         self.with(label, |f| f.automatic)
     }
 
+    pub fn is_mobile(&self, label: &str) -> bool {
+        self.with(label, |f| f.mobile)
+    }
+
+    pub fn set_mobile(&self, label: &str, on: bool) {
+        self.update(label, |f| f.mobile = on);
+    }
+
+    pub fn page_zoom(&self, label: &str) -> f64 {
+        self.with(label, |f| if f.page_zoom > 0.05 { f.page_zoom } else { 1.0 })
+    }
+
+    pub fn set_page_zoom(&self, label: &str, z: f64) {
+        self.update(label, |f| f.page_zoom = z);
+    }
+
+    /// Record a resize we are about to perform, so its echo is not read as a drag.
+    fn note_our_resize(&self, label: &str, phys_w: u32) {
+        self.update(label, |f| f.last_set_phys_w = phys_w);
+    }
+
     pub fn set_automatic(&self, label: &str, on: bool) {
         self.update(label, |f| {
             f.automatic = on;
@@ -463,6 +494,10 @@ impl SidebarState {
         self.update(label, |f| f.wiki_panel_w = w);
     }
 
+    fn panel_before_w(&self, label: &str) -> f64 {
+        self.with(label, |f| f.panel_before_w)
+    }
+
     fn save_panel_before_w(&self, label: &str, width: f64) {
         self.update(label, |f| {
             if f.panel_before_w <= 1.0 {
@@ -513,11 +548,17 @@ impl SidebarState {
     /// A drag while a panel is open means we must not restore the borrowed
     /// width. Nothing else: under Automatic we never resize the window, so
     /// there is no pending hug for a drag to fight.
-    pub fn note_user_resize(&self, label: &str) {
+    pub fn note_user_resize(&self, label: &str, phys_w: u32) {
         self.update(label, |f| {
             if f.hug_busy {
                 return;
             }
+            // Our own resize echoing back is not a drag.
+            if f.last_set_phys_w != 0 && phys_w.abs_diff(f.last_set_phys_w) <= 8 {
+                f.last_set_phys_w = 0;
+                return;
+            }
+            f.last_set_phys_w = 0;
             if f.wiki_open || f.about_open || f.options_open {
                 f.panel_user_resized = true;
             }
@@ -764,11 +805,71 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     }
     state.save_hug_width_once(&label, inner_w);
     state.set_hug_busy(&label, true);
+    state.note_our_resize(&label, want_phys);
     if let Err(e) = host.set_size(PhysicalSize::new(want_phys, phys.height)) {
         state.set_hug_busy(&label, false);
         return Err(e);
     }
     Ok(true)
+}
+
+/// Panels tile the game, which needs a window we are allowed to size. Under the
+/// desktop client's Automatic Resizing we are not, so they are refused there.
+///
+/// The mobile client has no Window Size settings at all -- `mobage_fixwindowsize`
+/// is simply always 0 -- so gating on "Automatic" there would refuse panels
+/// forever, including Options. It is also a fixed 320 layout that never re-fits,
+/// so resizing its viewport costs nothing. Panels are available on mobile.
+fn panels_unavailable(app: &AppHandle, label: &str) -> bool {
+    let state = app.state::<SidebarState>();
+    state.is_automatic(label) && !state.is_mobile(label)
+}
+
+/// Make the mobile client fill the width it has been given.
+///
+/// It lays out at a fixed 320 CSS px (`meta viewport width=320`) and never
+/// reflows, so the only way to fill a wider viewport is page zoom -- which is
+/// exactly what the maintainer's Thorium does at 200%. This is the webview's own
+/// zoom, the same one Pake already applies and the same one a browser's Ctrl+
+/// uses. It is NOT CSS `zoom` injected into the page, so Exception 3's boundary
+/// is untouched.
+///
+/// `devicePixelRatio = base * zoom`, and the wrapper's physical width is
+/// `right * dpr`. We want that to equal the game webview's physical width, so
+/// the target is `zoom * game_phys / (right * dpr)`. Nothing is hardcoded to
+/// 320, so it stays correct if Granblue ever changes its base width.
+fn fit_mobile_zoom(host: &Window, game_w_logical: f64) -> Option<String> {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    if !state.is_mobile(&label) {
+        return None;
+    }
+    let right = state.game_edge(&label);
+    let dpr = state.game_dpr(&label);
+    if right <= 1.0 || dpr <= 0.05 || game_w_logical <= 1.0 {
+        return None;
+    }
+    let Ok(scale) = host.scale_factor() else {
+        return None;
+    };
+    let game_phys = game_w_logical * scale;
+    let current = state.page_zoom(&label);
+    let target = (current * game_phys / (right * dpr)).clamp(0.25, 5.0);
+    // Converges in one step: base = dpr/zoom is invariant, so the next report
+    // yields the same target. The guard only avoids pointless churn.
+    if (target - current).abs() / current < 0.01 {
+        return None;
+    }
+    let Some(game) = game_webview(host) else {
+        return None;
+    };
+    match game.set_zoom(target) {
+        Ok(()) => {
+            state.set_page_zoom(&label, target);
+            Some(format!("mobile zoom {current:.3} -> {target:.3}\n"))
+        }
+        Err(e) => Some(format!("mobile zoom ERR {e}\n")),
+    }
 }
 
 /// Granblue switched to Automatic. Panels are unavailable there, so shut any
@@ -805,6 +906,7 @@ fn restore_hug_width(host: &Window) -> String {
         return format!("restore=skip saved={saved:.0}");
     }
     state.set_hug_busy(&label, true);
+    state.note_our_resize(&label, want_phys);
     match host.set_size(PhysicalSize::new(want_phys, phys.height)) {
         Ok(()) => format!("restore={saved:.0}"),
         Err(e) => {
@@ -899,6 +1001,7 @@ fn fit_inner_width(host: &Window, want: f64, allow_shrink: bool) -> tauri::Resul
         return Ok(inner_w);
     }
     state.set_hug_busy(&label, true);
+    state.note_our_resize(&label, want_phys);
     host.set_size(PhysicalSize::new(want_phys, phys.height))?;
     let after = host
         .inner_size()
@@ -953,10 +1056,15 @@ fn restore_panel_width(host: &Window) {
         schedule_panel_hug(host);
         return;
     }
-    let automatic = state.is_automatic(&label);
-    // Automatic: do not yank back to the pre-panel size. GBF may have
-    // reflowed larger; restoring a stale width clips the sidebar. Hug leftover
-    // to the current column instead.
+    // Desktop client under Automatic: do not yank back to the pre-panel size.
+    // GBF may have reflowed larger; restoring a stale width clips the sidebar.
+    // Hug leftover to the current column instead.
+    //
+    // The mobile client never reflows -- it is a fixed 320 layout we zoom to
+    // fit -- so there is no stale-width risk and the borrow must be given back.
+    // Without this the window only ever grows: mobage_fixwindowsize is
+    // permanently 0 on mobile, so `automatic` would always be true.
+    let automatic = state.is_automatic(&label) && !state.is_mobile(&label);
     if !automatic && before > 1.0 {
         let Ok(scale) = host.scale_factor() else {
             schedule_panel_hug(host);
@@ -969,6 +1077,7 @@ fn restore_panel_width(host: &Window) {
         let want_phys = (before * scale).round() as u32;
         if want_phys != 0 && want_phys != phys.width {
             state.set_hug_busy(&label, true);
+            state.note_our_resize(&label, want_phys);
             let _ = host.set_size(PhysicalSize::new(want_phys, phys.height));
         }
     }
@@ -1145,7 +1254,21 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     if (wiki_open || about_open || options_open) && panel_min > 0.0 && s.wiki_w + 1.0 >= panel_min {
         let scale = host.scale_factor()?;
         let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
-        let want = col + s.wiki_w + s.sidebar_w + WIKI_WIDEN_BUFFER;
+        // Tiled: keep the game exactly as wide as it is and widen the window
+        // by the panel. Using `col` here would re-introduce the wrapper loop.
+        // `panel_before_w` is the once-guard: it is set by the grow and cleared
+        // on close, so this cannot fire again on every relayout.
+        let tiled_now = locked && edge > 1.0 && automatic;
+        let already_grown = state.panel_before_w(&label) > 1.0;
+        let want = if tiled_now {
+            if already_grown {
+                0.0
+            } else {
+                inner_w + s.wiki_w + WIKI_WIDEN_BUFFER
+            }
+        } else {
+            col + s.wiki_w + s.sidebar_w + WIKI_WIDEN_BUFFER
+        };
         let ceiling = monitor_inner_ceiling(host);
         if inner_w + HUG_SLACK < want && want <= ceiling + WIKI_TIER_SLACK {
             let after = grow_inner_width(host, want).unwrap_or(inner_w);
@@ -1176,10 +1299,25 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     //
     // Unlocked: tile to the submenu overlay so Chat/Settings is flush with the
     // sidebar. A panel is always a sibling column.
-    let game_w = if (lock_fill || unlock_snap) && panel_open {
+    // The wiki keeps its webview once created, so a closed panel is hidden
+    // rather than destroyed. That is the point of it being its own webview:
+    // your page, scroll position and history survive being closed and
+    // reopened, and survive the game reloading beside it.
+    let panel_w = if (wiki_open || about_open || options_open) && s.wiki_w > 0.0 {
+        s.wiki_w
+    } else {
+        0.0
+    };
+    let game_w = if lock_fill && automatic {
+        // Tiled: game | sidebar | panel, and the game column is whatever the
+        // window has left. It must NOT be derived from #wrapper: under
+        // zoom-to-fit the wrapper fills whatever column it is given, so
+        // deriving the column from it makes the two chase each other. That
+        // loop grew the window to the monitor cap and stranded the sidebar
+        // off-screen at 3127 with a 2324 window.
+        (inner_w - s.sidebar_w - panel_w).max(MIN_GAME_WIDTH)
+    } else if (lock_fill || unlock_snap) && panel_open {
         col.max(1.0)
-    } else if lock_fill && automatic {
-        (inner_w - s.sidebar_w).max(MIN_GAME_WIDTH)
     } else if lock_fill {
         inner_w.max(1.0)
     } else if unlock_snap {
@@ -1199,29 +1337,33 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                 result_word(&z),
                 bounds_word(&game),
             ));
+            if let Some(note) = fit_mobile_zoom(host, game_w) {
+                out.push_str(&note);
+            }
         }
     }
 
-    // The wiki keeps its webview once created, so a closed panel is hidden
-    // rather than destroyed. That is the point of it being its own webview:
-    // your page, scroll position and history survive being closed and
-    // reopened, and survive the game reloading beside it.
-    let panel_w = if (wiki_open || about_open || options_open) && s.wiki_w > 0.0 {
-        s.wiki_w
-    } else {
-        0.0
-    };
     // Tiled Automatic: the sidebar owns the right edge of the window, and the
     // game viewport is everything left of it. Everywhere else the sidebar sits
     // on the game's own column edge.
-    let bar_x = if lock_fill && automatic && !panel_open {
-        (inner_w - s.sidebar_w).max(0.0)
+    // Tiled: the sidebar locks to the game's right edge, which with the column
+    // above is also `window - sidebar - panel`. Panels are always projected to
+    // the RIGHT of the sidebar -- never between game and sidebar -- so the
+    // sidebar never moves when one opens.
+    let bar_x = if lock_fill && automatic {
+        (inner_w - s.sidebar_w - panel_w).max(0.0)
     } else if outside {
         col
     } else {
         col + panel_w
     };
-    let panel_x = if outside { col + s.sidebar_w } else { col };
+    let panel_x = if lock_fill && automatic {
+        (inner_w - panel_w).max(0.0)
+    } else if outside {
+        col + s.sidebar_w
+    } else {
+        col
+    };
 
     match wiki_webview(host) {
         None => out.push_str("wiki: not created\n"),
@@ -1384,7 +1526,9 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
         WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
             let state = on_resize.app_handle().state::<SidebarState>();
             let label = on_resize.label().to_string();
-            state.note_user_resize(&label);
+            if let Ok(phys) = on_resize.inner_size() {
+                state.note_user_resize(&label, phys.width);
+            }
             if let Err(error) = layout(&on_resize) {
                 eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
             }
@@ -1726,7 +1870,7 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
     // Automatic we never resize the window to make room. Opening is refused
     // with a notice; closing still works so a panel left open by a mode
     // switch can always be shut.
-    if !was_open && app.state::<SidebarState>().is_automatic(&label) {
+    if !was_open && panels_unavailable(&app, &label) {
         return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
     }
 
@@ -1841,7 +1985,7 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
     // Automatic we never resize the window to make room. Opening is refused
     // with a notice; closing still works so a panel left open by a mode
     // switch can always be shut.
-    if !was_open && app.state::<SidebarState>().is_automatic(&label) {
+    if !was_open && panels_unavailable(&app, &label) {
         return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
     }
 
@@ -1945,7 +2089,7 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
     // Automatic we never resize the window to make room. Opening is refused
     // with a notice; closing still works so a panel left open by a mode
     // switch can always be shut.
-    if !was_open && app.state::<SidebarState>().is_automatic(&label) {
+    if !was_open && panels_unavailable(&app, &label) {
         return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
     }
 
@@ -2228,10 +2372,14 @@ pub fn gbf_game_edge(
     dpr: Option<f64>,
     overlay: Option<f64>,
     zoom: Option<f64>,
+    mobile: Option<bool>,
 ) -> Result<(), String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
     let state = app.state::<SidebarState>();
+    if let Some(m) = mobile {
+        state.set_mobile(&label, m);
+    }
     let dpr = dpr.filter(|v| *v > 0.05).unwrap_or(0.0);
     let overlay = overlay.unwrap_or(0.0);
     let zoom = zoom.filter(|v| *v > 0.05).unwrap_or(0.0);

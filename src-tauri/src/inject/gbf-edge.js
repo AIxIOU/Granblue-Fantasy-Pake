@@ -50,12 +50,16 @@
       if (typeof Game.getZoom === "function") zoom = Game.getZoom() || 1;
     } catch (e) {}
     if (zoom > 1.05 && r.right < 340) return;
+    // The mobile client has no #submenu column at all. That is the cleanest
+    // signal for which client we were served, and Rust needs it: on mobile
+    // there are no Window Size settings, so "Automatic" means something else.
     t.core.invoke("gbf_game_edge", {
       right: r.right,
       overlay: overlayRight(),
       automatic: auto,
       dpr: window.devicePixelRatio || 1,
       zoom: zoom,
+      mobile: !document.getElementById("submenu"),
     });
   };
 
