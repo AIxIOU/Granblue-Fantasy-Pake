@@ -790,16 +790,11 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if (inner_w - want_w).abs() <= HUG_SLACK {
         return Ok(false);
     }
-    // hug_busy blocks a grow loop while our set_size echoes. Switching Wiki
-    // → About/Options still has to shrink: the 1200px wiki HWND otherwise
-    // stays in the window as a hole (recording 175247). Do not shrink while
-    // hug_busy if no panel is open — that is the wiki-open grow, and hugging
-    // it back to the closed width refuses the panel ("Not enough room").
-    let shrinking = inner_w > want_w;
-    let panel_open = state.wiki_is_open(&label)
-        || state.about_is_open(&label)
-        || state.options_is_open(&label);
-    if state.hug_busy(&label) && !(shrinking && panel_open) {
+    // hug_busy blocks a grow/shrink loop while our set_size echoes. Nested
+    // layout during Wiki grow used to hug back to About's width and refuse
+    // ("Not enough room", recording 180531). Leftover after Wiki→About is
+    // hugged once layout finishes and clears hug_busy.
+    if state.hug_busy(&label) {
         return Ok(false);
     }
     let want_phys = (want_w * scale).round() as u32;
