@@ -8,19 +8,20 @@
   var timer = 0;
   function automatic() {
     try {
-      return !!(
-        window.Game &&
-        window.Game.setting &&
-        window.Game.setting.mobage_fixwindowsize === 0
-      );
+      if (!window.Game || !window.Game.setting) return null;
+      return window.Game.setting.mobage_fixwindowsize === 0;
     } catch (e) {
-      return false;
+      return null;
     }
   }
   function send(right) {
     var t = window.__TAURI__;
     if (!window.__gbfHug || !t || !t.core || !t.core.invoke) return;
-    t.core.invoke("gbf_game_edge", { right: right, automatic: automatic() });
+    var auto = automatic();
+    // Wait until GBF's setting exists so we do not hug a Fixed-size window
+    // that is actually Automatic (or the reverse).
+    if (auto === null) return;
+    t.core.invoke("gbf_game_edge", { right: right, automatic: auto });
   }
 
   window.__gbfReportEdge = function () {
@@ -33,7 +34,14 @@
 
   window.__gbfSetHug = function (on) {
     window.__gbfHug = !!on;
-    if (on) window.__gbfReportEdge();
+    if (!on) return;
+    window.__gbfReportEdge();
+    var n = 0;
+    var id = setInterval(function () {
+      n += 1;
+      window.__gbfReportEdge();
+      if (automatic() !== null || n > 20) clearInterval(id);
+    }, 100);
   };
 
   function schedule() {

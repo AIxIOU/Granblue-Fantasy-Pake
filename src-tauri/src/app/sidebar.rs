@@ -109,8 +109,9 @@ struct WindowFlags {
     hug_saved_w: f64,
     /// True between our set_size and the Resized layout that follows it.
     hug_busy: bool,
-    /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`). Hugging there
-    /// reloads the game and the window walks itself down; skip it.
+    /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`). When locked in
+    /// that mode the window stays user-resizable: the game fills the tiled
+    /// column, so both edges stay flush without hugging.
     automatic: bool,
 }
 
@@ -334,6 +335,11 @@ fn column_x(host: &Window, s: &Split) -> f64 {
     if !state.is_locked(label) {
         return s.game_w;
     }
+    // Automatic: GBF fills the game webview, so the tiled split already puts
+    // the sidebar on the game's right edge and on the window's right edge.
+    if state.is_automatic(label) {
+        return s.game_w;
+    }
     let edge = state.game_edge(label);
     if edge <= 1.0 {
         return s.game_w;
@@ -346,18 +352,17 @@ fn column_x(host: &Window, s: &Split) -> f64 {
     edge.clamp(0.0, inner_w.max(1.0))
 }
 
-/// Locked: keep the OS window's right edge on the sidebar's right edge.
-///
-/// Returns true if `set_size` was issued. The following `Resized` event runs
-/// layout for real. Under Automatic Resizing this is a window resize, which
-/// reloads Granblue — same cost as any other window resize in that mode.
+/// Locked + a fixed Window Size: shrink/grow the OS window so its right edge
+/// sits on the sidebar. Skipped under Automatic Resizing — there the user can
+/// drag the width, GBF fills the tiled game column, and both edges stay flush
+/// without a hug that would fight the drag (and reload the game).
 fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     if !state.is_locked(&label) || state.game_edge(&label) <= 1.0 {
         return Ok(false);
     }
-    if state.hug_busy(&label) {
+    if state.is_automatic(&label) || state.hug_busy(&label) {
         return Ok(false);
     }
     let scale = host.scale_factor()?;
@@ -412,7 +417,7 @@ fn restore_hug_width(host: &Window) -> String {
 fn locked_overlay_game(host: &Window) -> bool {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label();
-    state.is_locked(label) && state.game_edge(label) > 1.0
+    state.is_locked(label) && state.game_edge(label) > 1.0 && !state.is_automatic(label)
 }
 
 /// How much width the wiki could take right now, without opening it.
@@ -1036,11 +1041,23 @@ fn set_lock(host: &Window, on: bool) -> String {
         .set_locked(host.label(), on);
     let mut extra = String::new();
     if !on {
+        let automatic = host
+            .app_handle()
+            .state::<SidebarState>()
+            .is_automatic(host.label());
         host.app_handle()
             .state::<SidebarState>()
             .set_game_edge(host.label(), 0.0);
         extra.push(' ');
-        extra.push_str(&restore_hug_width(host));
+        if automatic {
+            let _ = host
+                .app_handle()
+                .state::<SidebarState>()
+                .take_hug_saved_w(host.label());
+            extra.push_str("restore=keep");
+        } else {
+            extra.push_str(&restore_hug_width(host));
+        }
     }
     match game_webview(host) {
         Some(game) => {
