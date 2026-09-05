@@ -86,17 +86,19 @@
   .btn .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .btn .key { color: var(--fg-dim); font-size: 10px; }
 
-  /* Mobile only. Large over Small, full width. Collapsed: L over S. */
+  /* Mobile only. Large over Small, sized to the labels. Collapsed: L over S. */
   #game-size { flex: 0 0 auto; }
   .size-row {
     display: flex;
     flex-direction: column;
+    align-items: stretch;
+    width: max-content;
+    margin: 0 auto;
     gap: 4px;
     padding: 4px 10px 10px;
   }
   .size-btn {
-    width: 100%;
-    padding: 7px 8px;
+    padding: 4px 8px;
     background: none;
     border: 1px solid var(--line);
     border-radius: 6px;
@@ -114,10 +116,13 @@
   }
   .size-btn .short { display: none; }
   body.collapsed .size-row {
+    width: auto;
+    margin: 0;
+    align-items: stretch;
     gap: 4px;
     padding: 4px 6px 8px;
   }
-  body.collapsed .size-btn { padding: 6px 0; font-size: 11px; }
+  body.collapsed .size-btn { width: auto; padding: 6px 0; font-size: 11px; }
   body.collapsed .size-btn .full { display: none; }
   body.collapsed .size-btn .short { display: inline; }
 
