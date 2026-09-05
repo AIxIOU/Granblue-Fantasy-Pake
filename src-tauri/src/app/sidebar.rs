@@ -290,8 +290,6 @@ struct WindowFlags {
     game_dpr: f64,
     /// Last Game.getZoom() from the game webview. 0 = unknown.
     game_zoom: f64,
-    /// Inner width to restore when unlocking, after a lock hug. 0 = none.
-    hug_saved_w: f64,
     /// True between our set_size and the Resized layout that follows it.
     hug_busy: bool,
     /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`).
@@ -580,24 +578,6 @@ impl SidebarState {
         self.update(label, |f| f.hug_busy = on);
     }
 
-    pub fn save_hug_width_once(&self, label: &str, width: f64) {
-        self.update(label, |f| {
-            if f.hug_saved_w <= 1.0 {
-                f.hug_saved_w = width;
-            }
-        });
-    }
-
-    pub fn take_hug_saved_w(&self, label: &str) -> f64 {
-        let mut out = 0.0;
-        self.update(label, |f| {
-            out = f.hug_saved_w;
-            f.hug_saved_w = 0.0;
-            f.hug_busy = false;
-        });
-        out
-    }
-
     fn collapse_for_panel(&self, label: &str) {
         self.update(label, |f| {
             f.collapsed = true;
@@ -801,7 +781,6 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if want_phys == 0 || want_phys == phys.width {
         return Ok(false);
     }
-    state.save_hug_width_once(&label, inner_w);
     state.set_hug_busy(&label, true);
     state.note_our_resize(&label, want_phys);
     if let Err(e) = host.set_size(PhysicalSize::new(want_phys, phys.height)) {
@@ -850,14 +829,6 @@ fn apply_mobile_zoom(host: &Window) -> Option<String> {
         }
         Err(e) => Some(format!("mobile zoom ERR {e}\n")),
     }
-}
-
-/// Desktop client switched to Automatic. Close any open panel; `layout` hides
-/// the webviews. State only -- the caller is not guaranteed to be on the main
-/// thread.
-fn close_panels_for_automatic(app: &AppHandle, label: &str) {
-    let state = app.state::<SidebarState>();
-    let _ = state.close_panels_for_automatic(label);
 }
 
 /// How much inner width the monitor can actually hold (logical px).
@@ -944,7 +915,13 @@ fn fit_inner_width(host: &Window, want: f64, allow_shrink: bool) -> tauri::Resul
     }
     state.set_hug_busy(&label, true);
     state.note_our_resize(&label, want_phys);
-    host.set_size(PhysicalSize::new(want_phys, phys.height))?;
+    // Clear hug_busy ourselves if the resize fails. Only apply_layout's tail
+    // clears it, and a failed set_size fires no Resized event to get there --
+    // the flag would stay set and silently refuse every later hug.
+    if let Err(e) = host.set_size(PhysicalSize::new(want_phys, phys.height)) {
+        state.set_hug_busy(&label, false);
+        return Err(e);
+    }
     let after = host
         .inner_size()
         .ok()
@@ -1025,8 +1002,25 @@ fn prepare_panel_open(
         state.collapse_for_panel(&label);
         note.push_str(&format!("Sidebar collapsed to make room for the {name}.\n"));
     }
+    // Undo the collapse we forced. Every failure past this point has to run
+    // it, not just the reserved-too-small one: leaving the rail collapsed
+    // after a panel that never opened is a state the player did not ask for.
+    let undo_collapse = |state: &SidebarState| {
+        if need_collapse {
+            state.update(&label, |f| {
+                f.collapsed = false;
+                f.collapsed_for_panel = false;
+            });
+        }
+    };
     let want = needed_for_panel(game_col, chosen, collapsed || need_collapse);
-    let after = fit_inner_width(host, want, true).map_err(|e| e.to_string())?;
+    let after = match fit_inner_width(host, want, true) {
+        Ok(v) => v,
+        Err(e) => {
+            undo_collapse(&state);
+            return Err(e.to_string());
+        }
+    };
     let bar = sidebar_want(collapsed || need_collapse);
     let space = (after - game_col - bar).max(0.0);
     let reserved = if space >= prefer - WIKI_TIER_SLACK {
@@ -1037,12 +1031,7 @@ fn prepare_panel_open(
         0.0
     };
     if reserved < minimum {
-        if need_collapse {
-            state.update(&label, |f| {
-                f.collapsed = false;
-                f.collapsed_for_panel = false;
-            });
-        }
+        undo_collapse(&state);
         restore_panel_width(host);
         return Err(panel_no_room_notice(mobile));
     }
@@ -1128,7 +1117,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     // it either strands a dead strip or fights the player's drag. The sidebar
     // is available on the fixed Sizes, and on the mobile client, which does not
     // re-fit at all. See GBF_Pake_HANDOFF_2026-09-05af.md.
-    if automatic && !state.is_mobile(&label) {
+    if automatic && !mobile {
         if let Some(bar) = sidebar_webview(host) {
             let _ = bar.hide();
         }
@@ -1604,7 +1593,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .page_zoom(window.label());
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nkeep=0\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -2169,10 +2158,11 @@ fn set_lock(host: &Window, on: bool) -> String {
         .set_locked(host.label(), on);
     let mut extra = String::new();
     if !on {
-        let _ = host
-            .app_handle()
+        // Unlock cannot leave a hug in flight: the sidebar stops tracking the
+        // game edge, so nothing would clear the flag.
+        host.app_handle()
             .state::<SidebarState>()
-            .take_hug_saved_w(host.label());
+            .set_hug_busy(host.label(), false);
         extra.push_str(" restore=overlay");
     }
     let out = match game_webview(host) {
@@ -2342,7 +2332,9 @@ pub fn gbf_game_edge(
     // Desktop Automatic is a bare window. Close panels on the switch in.
     // Mobile reports mobage_fixwindowsize === 0 always; that is not a switch.
     if automatic && !prev_auto && !state.is_mobile(&label) {
-        close_panels_for_automatic(&app, &label);
+        // State only -- we are not guaranteed to be on the main thread; the
+        // `layout` below hides the webviews.
+        let _ = state.close_panels_for_automatic(&label);
     }
     let handle = app.clone();
     let win_label = label;
