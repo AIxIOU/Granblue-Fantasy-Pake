@@ -53,6 +53,18 @@
         invoke("gbf_toggle_sidebar");
         return;
       }
+      // Same as main (exception 5): reload and back apply to whichever
+      // webview has focus — game, wiki, or About — not the OS window.
+      if (e.key === "r" || e.key === "R") {
+        e.preventDefault();
+        location.reload();
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        history.back();
+        return;
+      }
       var hash = HASH[e.key];
       if (hash) {
         e.preventDefault();

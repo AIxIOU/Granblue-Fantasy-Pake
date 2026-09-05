@@ -329,6 +329,16 @@
         .catch(function (er) { say(String(er && er.message ? er.message : er)); });
       return;
     }
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      location.reload();
+      return;
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      history.back();
+      return;
+    }
     var hit = null;
     NAV.forEach(function (n) {
       if (n.key && n.key.toLowerCase() === String(e.key).toLowerCase()) hit = n;
