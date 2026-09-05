@@ -61,8 +61,7 @@
     });
   };
 
-  window.__gbfSetHug = function (on) {
-    window.__gbfHug = !!on;
+  window.__gbfSetHug = function () {
     window.__gbfReportEdge();
     var n = 0;
     var id = setInterval(function () {
