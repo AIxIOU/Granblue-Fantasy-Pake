@@ -456,13 +456,20 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .map(|w| format!("{} @{}", w.label(), bounds_word(&w)))
         .collect();
 
+    // The two manager views side by side -- the evidence for the get_window
+    // rule in the module docs.
+    let mut wv: Vec<String> = window.app_handle().webview_windows().keys().cloned().collect();
+    wv.sort();
+    let mut wins: Vec<String> = window.app_handle().windows().keys().cloned().collect();
+    wins.sort();
+
     let scale = window.scale_factor().unwrap_or(-1.0);
     let phys = window.inner_size().map_err(|e| e.to_string())?;
     let logical = phys.to_logical::<f64>(if scale > 0.0 { scale } else { 1.0 });
     let collapsed = window.app_handle().state::<SidebarState>().is_collapsed();
 
     Ok(format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
