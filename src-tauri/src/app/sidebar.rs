@@ -776,9 +776,6 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if snap_css(&state, &label) <= 1.0 {
         return Ok(false);
     }
-    if state.hug_busy(&label) {
-        return Ok(false);
-    }
     let scale = host.scale_factor()?;
     let phys = host.inner_size()?;
     let inner_w = phys.to_logical::<f64>(scale).width;
@@ -791,6 +788,18 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     let want_bar = sidebar_want(state.is_collapsed(&label));
     let want_w = col + reserved_panel_w(&state, &label, s.wiki_w) + want_bar;
     if (inner_w - want_w).abs() <= HUG_SLACK {
+        return Ok(false);
+    }
+    // hug_busy blocks a grow loop while our set_size echoes. Switching Wiki
+    // → About/Options still has to shrink: the 1200px wiki HWND otherwise
+    // stays in the window as a hole (recording 175247). Do not shrink while
+    // hug_busy if no panel is open — that is the wiki-open grow, and hugging
+    // it back to the closed width refuses the panel ("Not enough room").
+    let shrinking = inner_w > want_w;
+    let panel_open = state.wiki_is_open(&label)
+        || state.about_is_open(&label)
+        || state.options_is_open(&label);
+    if state.hug_busy(&label) && !(shrinking && panel_open) {
         return Ok(false);
     }
     let want_phys = (want_w * scale).round() as u32;
@@ -1257,7 +1266,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                     bounds_word(&wiki),
                 ));
             } else {
-                out.push_str(&format!("wiki hide={}\n", result_word(&wiki.hide())));
+                out.push_str(&format!("wiki hide={}\n", hide_panel(&wiki)));
             }
         }
     }
@@ -1277,7 +1286,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                     bounds_word(&about),
                 ));
             } else {
-                out.push_str(&format!("about hide={}\n", result_word(&about.hide())));
+                out.push_str(&format!("about hide={}\n", hide_panel(&about)));
             }
         }
     }
@@ -1297,7 +1306,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                     bounds_word(&options),
                 ));
             } else {
-                out.push_str(&format!("options hide={}\n", result_word(&options.hide())));
+                out.push_str(&format!("options hide={}\n", hide_panel(&options)));
             }
             let e = options.eval(format!(
                 "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile}}})"
@@ -1331,6 +1340,15 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
 
     state.set_hug_busy(&label, false);
     Ok(out)
+}
+
+fn hide_panel(wv: &Webview) -> String {
+    let h = result_word(&wv.hide());
+    // hide() alone leaves the old 1200px wiki HWND in the window. Switching
+    // to About/Options then shows Relink through that hole (recording 175247).
+    let _ = wv.set_position(LogicalPosition::new(-10000.0, 0.0));
+    let _ = wv.set_size(LogicalSize::new(1.0, 1.0));
+    h
 }
 
 fn result_word<T>(r: &tauri::Result<T>) -> String {
