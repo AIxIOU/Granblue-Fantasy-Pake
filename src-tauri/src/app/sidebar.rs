@@ -141,6 +141,11 @@ struct SavedLayout {
     /// the webview is built.
     #[serde(default)]
     desktop_client: bool,
+    /// Mobile size: false = Default (zoom 2, Granblue's full scale), true =
+    /// Half (zoom 1). The mobile client is a fixed 320 CSS layout, so "size"
+    /// here is simply the webview zoom we render it at.
+    #[serde(default)]
+    mobile_half: bool,
 }
 
 fn layout_state_path(app: &AppHandle) -> Option<PathBuf> {
@@ -176,6 +181,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 wiki_outside: sidebar.is_wiki_outside(label),
                 tray: sidebar.is_tray_enabled(),
                 desktop_client: sidebar.is_desktop_client(),
+                mobile_half: sidebar.is_mobile_half(),
             },
         );
     }
@@ -203,6 +209,16 @@ fn restore_layout_wiki_outside(app: &AppHandle, label: &str) -> bool {
     load_layout_states(app)
         .get(label)
         .map(|s| s.wiki_outside)
+        .unwrap_or(false)
+}
+
+/// Mobile size. Process-wide, like the client choice.
+pub fn restore_layout_mobile_half(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.mobile_half)
+        .or_else(|| states.values().next().map(|s| s.mobile_half))
         .unwrap_or(false)
 }
 
@@ -295,6 +311,8 @@ pub struct SidebarState {
     tray: AtomicBool,
     /// Process-wide. Which Granblue client to ask for. False = mobile.
     desktop_client: AtomicBool,
+    /// Process-wide. Mobile size: false = Default (zoom 2), true = Half (zoom 1).
+    mobile_half: AtomicBool,
 }
 
 impl SidebarState {
@@ -322,6 +340,14 @@ impl SidebarState {
 
     pub fn set_desktop_client(&self, on: bool) {
         self.desktop_client.store(on, Ordering::Relaxed);
+    }
+
+    pub fn is_mobile_half(&self) -> bool {
+        self.mobile_half.load(Ordering::Relaxed)
+    }
+
+    pub fn set_mobile_half(&self, on: bool) {
+        self.mobile_half.store(on, Ordering::Relaxed);
     }
 
     pub fn is_collapsed(&self, label: &str) -> bool {
@@ -816,10 +842,11 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if state.hug_busy(&label) {
         return Ok(false);
     }
-    // Automatic never resizes the window. It does not need to: the game
-    // viewport is tiled to (window - sidebar), so the sidebar is flush by
-    // construction and there is no strip to chase.
-    if state.is_automatic(&label) {
+    // The desktop client on Automatic Resizing never gets resized -- it re-fits
+    // and reloads on every width change, so anything we do fights the player.
+    // The mobile client is a fixed layout at a fixed zoom, so it hugs exactly
+    // like a fixed Size.
+    if state.is_automatic(&label) && !state.is_mobile(&label) {
         return Ok(false);
     }
     let _ = state.take_panel_hug_due(&label);
@@ -863,48 +890,33 @@ fn panels_unavailable(app: &AppHandle, label: &str) -> bool {
     state.is_automatic(label) && !state.is_mobile(label)
 }
 
-/// Make the mobile client fill the width it has been given.
+/// Render the mobile client at the chosen size.
 ///
-/// It lays out at a fixed 320 CSS px (`meta viewport width=320`) and never
-/// reflows, so the only way to fill a wider viewport is page zoom -- which is
-/// exactly what the maintainer's Thorium does at 200%. This is the webview's own
-/// zoom, the same one Pake already applies and the same one a browser's Ctrl+
-/// uses. It is NOT CSS `zoom` injected into the page, so Exception 3's boundary
-/// is untouched.
+/// The mobile client is a fixed 320 CSS layout, so "size" is simply the webview
+/// zoom we render it at: Default = 2 (Granblue's full scale, a 721px game at
+/// this display) and Half = 1 (360px). Because the zoom is fixed rather than
+/// fitted to the column, `#wrapper` has a stable width, and mobile can use the
+/// same layout and hug path as the desktop client's fixed Sizes.
 ///
-/// `devicePixelRatio = base * zoom`, and the wrapper's physical width is
-/// `right * dpr`. We want that to equal the game webview's physical width, so
-/// the target is `zoom * game_phys / (right * dpr)`. Nothing is hardcoded to
-/// 320, so it stays correct if Granblue ever changes its base width.
-fn fit_mobile_zoom(host: &Window, game_w_logical: f64) -> Option<String> {
+/// This is the webview's own zoom -- the same one Pake already applies and a
+/// browser's Ctrl+ uses. It is NOT CSS `zoom` injected into the page, so
+/// Exception 3's boundary is untouched.
+fn apply_mobile_zoom(host: &Window) -> Option<String> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     if !state.is_mobile(&label) {
         return None;
     }
-    let right = state.game_edge(&label);
-    let dpr = state.game_dpr(&label);
-    if right <= 1.0 || dpr <= 0.05 || game_w_logical <= 1.0 {
-        return None;
-    }
-    let Ok(scale) = host.scale_factor() else {
-        return None;
-    };
-    let game_phys = game_w_logical * scale;
+    let target = if state.is_mobile_half() { 1.0 } else { 2.0 };
     let current = state.page_zoom(&label);
-    let target = (current * game_phys / (right * dpr)).clamp(0.25, 5.0);
-    // Converges in one step: base = dpr/zoom is invariant, so the next report
-    // yields the same target. The guard only avoids pointless churn.
-    if (target - current).abs() / current < 0.01 {
+    if (target - current).abs() < 0.01 {
         return None;
     }
-    let Some(game) = game_webview(host) else {
-        return None;
-    };
+    let game = game_webview(host)?;
     match game.set_zoom(target) {
         Ok(()) => {
             state.set_page_zoom(&label, target);
-            Some(format!("mobile zoom {current:.3} -> {target:.3}\n"))
+            Some(format!("mobile zoom {current:.2} -> {target:.2}\n"))
         }
         Err(e) => Some(format!("mobile zoom ERR {e}\n")),
     }
@@ -1262,6 +1274,8 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let outside = state.is_wiki_outside(&label);
     let tray = state.is_tray_enabled();
     let desktop_client = state.is_desktop_client();
+    let mobile = state.is_mobile(&label);
+    let mobile_half = state.is_mobile_half();
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
@@ -1300,6 +1314,13 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             "layout: desktop client on Automatic -- bare window, sidebar hidden\n"
         ));
     }
+
+    // Past the bare-window check, `automatic` can only still be true on the
+    // mobile client -- and there it means nothing, because the mobile client has
+    // no Window Size settings. Its size is our zoom, which is fixed, so
+    // `#wrapper` is stable and mobile can take exactly the same layout and hug
+    // path as the desktop client's fixed Sizes. Everything below is that path.
+    let automatic = automatic && !state.is_mobile(&label);
 
     let col = column_x(host, &s);
     let edge = state.game_edge(&label);
@@ -1410,7 +1431,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                 result_word(&z),
                 bounds_word(&game),
             ));
-            if let Some(note) = fit_mobile_zoom(host, game_w) {
+            if let Some(note) = apply_mobile_zoom(host) {
                 out.push_str(&note);
             }
         }
@@ -1508,7 +1529,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},automatic:{automatic}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},automatic:{automatic},mobile:{mobile},mobileHalf:{mobile_half}}})"
             ));
             let _ = bar.hide();
             let v = bar.show();
@@ -2408,6 +2429,32 @@ pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
 
 /// Place the wiki/About between the game and the sidebar (`outside=false`) or
 /// on the sidebar's outer right edge (`outside=true`, live-client order).
+/// Mobile size: Default (Granblue's full scale) or Half. No restart needed --
+/// it is only a webview zoom plus the usual hug.
+#[tauri::command]
+pub fn gbf_set_mobile_half(window: Window, half: bool) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    app.state::<SidebarState>().set_mobile_half(half);
+    persist_layout_state(&app);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&label) {
+            Some(host) => layout_verbose(&host),
+            None => format!("get_window({label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    Ok(format!("mobile_half={half}
+{report}"))
+}
+
 /// Choose which Granblue client to request. Mobile is the default.
 ///
 /// The user agent can only be set when a webview is built, so this persists the

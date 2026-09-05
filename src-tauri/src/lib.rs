@@ -322,6 +322,7 @@ pub fn run_app() {
             app::sidebar::gbf_toggle_lock,
             app::sidebar::gbf_set_wiki_outside,
             app::sidebar::gbf_set_desktop_client,
+            app::sidebar::gbf_set_mobile_half,
             app::setup::gbf_set_tray,
             app::sidebar::gbf_game_edge,
             app::sidebar::gbf_new_window,
@@ -335,6 +336,9 @@ pub fn run_app() {
             let desktop_client = app::sidebar::restore_layout_desktop_client(app.app_handle());
             app.state::<app::sidebar::SidebarState>()
                 .set_desktop_client(desktop_client);
+            let mobile_half = app::sidebar::restore_layout_mobile_half(app.app_handle());
+            app.state::<app::sidebar::SidebarState>()
+                .set_mobile_half(mobile_half);
             let tray_on = app::sidebar::restore_layout_tray(app.app_handle());
             app.state::<app::sidebar::SidebarState>()
                 .set_tray_enabled(tray_on);

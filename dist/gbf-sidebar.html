@@ -53,6 +53,10 @@
     border-bottom: 1px solid var(--line); background: #10131a;
   }
   #wikibar[hidden] { display: none; }
+  /* .btn and .sec set their own `display`, which beats the browser's default
+     [hidden] rule -- so hiding a row with el.hidden silently did nothing.
+     This makes `hidden` authoritative for every element on the page. */
+  [hidden] { display: none !important; }
   .wbtn {
     flex: 1 1 auto; padding: 4px 0;
     background: none; border: 1px solid var(--line); border-radius: 5px;
@@ -177,6 +181,12 @@
     // Matches main: hide the chat column (exception 2) and snap the sidebar's
     // left edge to #wrapper's right edge. Alt+L.
     { label: "Lock to game", cmd: "gbf_toggle_lock", id: "nav-lock", icon: "🔒", key: "L" },
+    // Mobile only. The mobile client is a fixed 320 layout, so its "size" is
+    // the zoom we render it at: Default is Granblue's full scale, Half is
+    // exactly half of it. Lock to game is hidden there -- the sidebar always
+    // sits on the game's edge, so there is nothing to toggle.
+    { label: "Default size", cmd: "gbf_set_mobile_half", args: { half: false }, id: "nav-size-full", icon: "⬒" },
+    { label: "Half size", cmd: "gbf_set_mobile_half", args: { half: true }, id: "nav-size-half", icon: "⬓" },
 
     { section: "Reference" },
     { label: "Wiki", cmd: "gbf_wiki_toggle", id: "nav-wiki", icon: "⊞", key: "W" },
@@ -281,6 +291,8 @@
     b.appendChild(key);
 
     if (item.id) b.id = item.id;
+    // Mobile-only rows start hidden; setState reveals them on the mobile client.
+    if (item.id === "nav-size-full" || item.id === "nav-size-half") b.hidden = true;
     b.addEventListener("click", function () {
       if (item.cmd) {
         say(item.label + "…");
@@ -356,6 +368,21 @@
       // explain themselves instead of opening. See PANEL_NEEDS_FIXED_SIZE.
       var auto = !!st.automatic;
       document.body.classList.toggle("automatic", auto);
+
+      // Mobile: Lock to game does nothing (the sidebar always sits on the
+      // game's edge), so hide it and show the two mobile sizes instead.
+      var isMobile = !!st.mobile;
+      if (l) l.hidden = isMobile;
+      var full = document.getElementById("nav-size-full");
+      var half = document.getElementById("nav-size-half");
+      if (full) {
+        full.hidden = !isMobile;
+        full.classList.toggle("active", isMobile && !st.mobileHalf);
+      }
+      if (half) {
+        half.hidden = !isMobile;
+        half.classList.toggle("active", isMobile && !!st.mobileHalf);
+      }
       var wikiRow = document.getElementById("nav-wiki");
       if (wikiRow) wikiRow.hidden = auto;
       var wikiSec = document.getElementById("sec-reference");
