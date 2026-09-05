@@ -292,6 +292,10 @@ struct WindowFlags {
     game_zoom: f64,
     /// True between our set_size and the Resized layout that follows it.
     hug_busy: bool,
+    /// Lock CSS last pushed into the game page. `None` = unknown, which is
+    /// what a page load leaves it as: Granblue rebuilds its document and
+    /// takes our style element with it.
+    lock_css: Option<bool>,
     /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`).
     automatic: bool,
     /// Granblue served its mobile client (no `#submenu` column). The mobile
@@ -578,6 +582,17 @@ impl SidebarState {
         self.update(label, |f| f.hug_busy = on);
     }
 
+    /// Record what we pushed, and say whether it was a change. `None` marks
+    /// the page's copy as unknown again -- call that on every page load.
+    fn note_lock_css(&self, label: &str, on: Option<bool>) -> bool {
+        let mut changed = false;
+        self.update(label, |f| {
+            changed = f.lock_css != on;
+            f.lock_css = on;
+        });
+        changed
+    }
+
     fn collapse_for_panel(&self, label: &str) {
         self.update(label, |f| {
             f.collapsed = true;
@@ -795,7 +810,18 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
 /// `mobage_fixwindowsize` is always 0 -- so gating on that flag would refuse
 /// panels forever, including Options.
 fn panels_unavailable(app: &AppHandle, label: &str) -> bool {
-    let state = app.state::<SidebarState>();
+    native_mode(&app.state::<SidebarState>(), label)
+}
+
+/// Desktop client + Automatic Resizing. Nothing of ours runs in the page
+/// there: no sidebar, no panels, no lock CSS, and every Rule 0 exception in
+/// the injected scripts gates itself off `window.__gbfInert()`. The only
+/// thing left is gbf-edge.js's 2s read of `mobage_fixwindowsize`, which is
+/// how we notice the player leaving.
+///
+/// The mobile client is never this mode: it has no Window Size settings, so
+/// `mobage_fixwindowsize` is permanently 0 there and means nothing.
+fn native_mode(state: &SidebarState, label: &str) -> bool {
     state.is_automatic(label) && !state.is_mobile(label)
 }
 
@@ -1137,6 +1163,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let _ = game.set_size(LogicalSize::new(full.max(1.0), s.height));
         }
         state.set_hug_busy(&label, false);
+        sync_lock_css(host);
         return Ok(format!(
             "layout: desktop client on Automatic -- bare window, sidebar hidden\n"
         ));
@@ -1323,6 +1350,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     }
 
     state.set_hug_busy(&label, false);
+    sync_lock_css(host);
     Ok(out)
 }
 
@@ -2136,16 +2164,40 @@ pub fn on_game_page_finished(webview: &Webview, url: &Url) {
     }
 }
 
+/// Push the lock CSS only when the page's copy does not already match.
+///
+/// A one-shot eval at the Automatic transition lost a race with Granblue's
+/// reload: `reapply_lock` fired while Rust still thought it was in native
+/// mode and pushed the OFF form, and the ON push that followed was wiped by
+/// the document swap. `layout` runs after every edge report, so syncing here
+/// self-heals whatever order those land in.
+fn sync_lock_css(host: &Window) {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    let want = state.is_locked(&label) && !native_mode(&state, &label);
+    if !state.note_lock_css(&label, Some(want)) {
+        return;
+    }
+    if let Some(game) = game_webview(host) {
+        let _ = game.eval(lock_js(want));
+    }
+}
+
 /// Push the current lock state into a game webview.
 ///
 /// Called on every page load as well as on toggle, because Granblue rebuilds
 /// its document on each navigation and takes our style element with it.
 pub fn reapply_lock(webview: &Webview) {
     let label = webview.window().label().to_string();
-    let locked = webview
-        .app_handle()
-        .state::<SidebarState>()
-        .is_locked(&label);
+    let state = webview.app_handle().state::<SidebarState>();
+    // Native mode: hiding GBF's own #submenu / #general-chat there took the
+    // player's chat column away for nothing -- the sidebar that column makes
+    // room for is not even shown. Push the OFF form so a stale lock style
+    // from before the switch is removed too.
+    let locked = state.is_locked(&label) && !native_mode(&state, &label);
+    // The document swap took our style element with it, whatever we last
+    // pushed. Record the fresh truth so a later sync is not skipped.
+    state.note_lock_css(&label, Some(locked));
     if let Err(error) = webview.eval(lock_js(locked)) {
         eprintln!("[Pake][gbf] could not reapply locked mode: {error}");
     }
@@ -2329,13 +2381,20 @@ pub fn gbf_game_edge(
     }
     state.set_game_edge(&label, right);
     state.set_game_overlay(&label, overlay);
-    // Desktop Automatic is a bare window. Close panels on the switch in.
-    // Mobile reports mobage_fixwindowsize === 0 always; that is not a switch.
-    if automatic && !prev_auto && !state.is_mobile(&label) {
+    // Crossing into or out of native mode. Mobile reports
+    // mobage_fixwindowsize === 0 always, so it is never either switch.
+    let desktop = !state.is_mobile(&label);
+    let went_native = automatic && !prev_auto && desktop;
+    let left_native = !automatic && prev_auto && desktop;
+    if went_native {
         // State only -- we are not guaranteed to be on the main thread; the
         // `layout` below hides the webviews.
         let _ = state.close_panels_for_automatic(&label);
     }
+    // Crossing either way is handled by `sync_lock_css` inside the `layout`
+    // below: it pushes the CSS only when the page's copy does not match, so
+    // it does not matter which of the reload and the report lands first.
+    let _ = left_native;
     let handle = app.clone();
     let win_label = label;
     app.run_on_main_thread(move || {

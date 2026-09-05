@@ -10,6 +10,14 @@
   if (window.__gbfNativeDrag) return;
   window.__gbfNativeDrag = true;
 
+  // Desktop client + Automatic Resizing is a NATIVE mode: none of our page
+  // exceptions run there. Checked per event, not once at load -- gbf-edge.js
+  // is injected after this file, and the player can change Window Size at any
+  // time. Unknown counts as not inert; see __gbfInert.
+  function inert() {
+    return !!(window.__gbfInert && window.__gbfInert());
+  }
+
   var DRAG_SCROLL_THRESHOLD = 4;
   var DRAG_CLICK_SUPPRESS_MS = 250;
   var MOMENTUM_MIN_VELOCITY = 0.15;
@@ -74,6 +82,7 @@
   document.addEventListener(
     "dragstart",
     function (e) {
+      if (inert()) return;
       var t = e.target;
       if (!t || typeof t.closest !== "function") return;
       if (!t.closest("img, a")) return;
@@ -112,7 +121,7 @@
   document.addEventListener(
     "pointerdown",
     function (e) {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || inert()) return;
       var target = findScrollableAncestor(e.target);
       if (!target) return;
       pageMomentum.stop();
@@ -157,6 +166,10 @@
   document.addEventListener(
     "click",
     function (e) {
+      if (inert()) {
+        pageDragEndedAt = 0;
+        return;
+      }
       if (Date.now() - pageDragEndedAt < DRAG_CLICK_SUPPRESS_MS) {
         pageDragEndedAt = 0;
         e.preventDefault();

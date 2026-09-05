@@ -38,6 +38,10 @@
     "keydown",
     function (e) {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      // Desktop client + Automatic Resizing is native: no sidebar, no panels,
+      // so nothing to drive and no key of the game's to shadow. __gbfInert is
+      // defined only in the game webview, so the panels keep their shortcuts.
+      if (window.__gbfInert && window.__gbfInert()) return;
       if (e.key === "w" || e.key === "W") {
         e.preventDefault();
         invoke("gbf_wiki_toggle");
