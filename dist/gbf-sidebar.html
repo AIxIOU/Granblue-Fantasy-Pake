@@ -86,17 +86,37 @@
   .btn .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .btn .key { color: var(--fg-dim); font-size: 10px; }
 
-  /* Mobile only. One toggle: Large / Small text, active word highlighted. */
+  /* Mobile only. Icon + one button; Large / Small text, active word highlighted. */
   #game-size { flex: 0 0 auto; width: 100%; }
+  .size-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 12px 10px;
+    border: 0;
+    background: none;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+  }
+  .size-line .ico {
+    width: 18px;
+    flex: 0 0 auto;
+    text-align: center;
+    font-size: 14px;
+    cursor: pointer;
+  }
   .size-toggle {
     display: flex;
     flex-direction: row;
-    align-items: baseline;
+    align-items: center;
     width: max-content;
     gap: 8px;
     margin: 0;
-    padding: 2px 12px 10px;
-    border: 0;
+    padding: 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
     background: none;
   }
   .size-opt {
@@ -113,17 +133,11 @@
     color: var(--accent);
     font-weight: 600;
   }
-  .size-opt .short { display: none; }
-  body.collapsed .size-toggle {
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 0 8px;
-    width: auto;
+  body.collapsed .size-line {
+    justify-content: center;
+    padding: 8px 0;
   }
-  body.collapsed .size-opt { font-size: 11px; }
-  body.collapsed .size-opt .full { display: none; }
-  body.collapsed .size-opt .short { display: inline; }
+  body.collapsed .size-toggle { display: none; }
 
   #dbg {
     position: fixed; left: 0; right: 0; bottom: 26px;
@@ -354,17 +368,34 @@
     sec.className = "sec";
     sec.id = "sec-game-size";
     sec.textContent = "Game size";
+    var line = document.createElement("div");
+    line.className = "size-line";
+    var ico = document.createElement("span");
+    ico.className = "ico";
+    ico.textContent = "⛶";
+    ico.title = "Game size";
+    ico.addEventListener("click", function () {
+      var half = document.body.getAttribute("data-mobile-half") === "1";
+      var next = !half;
+      say((next ? "Small" : "Large") + "…");
+      invoke("gbf_set_mobile_half", { half: next })
+        .then(function (r) {
+          say((next ? "Small" : "Large") + " ok");
+          dump(r);
+        })
+        .catch(function (e) { say(String(e && e.message ? e.message : e)); });
+    });
     var row = document.createElement("div");
     row.className = "size-toggle";
     row.setAttribute("role", "group");
     row.setAttribute("aria-label", "Game size");
-    function sizeOpt(id, label, short, half) {
+    function sizeOpt(id, label, half) {
       var b = document.createElement("button");
       b.type = "button";
       b.className = "size-opt";
       b.id = id;
       b.title = label;
-      b.innerHTML = '<span class="full">' + label + '</span><span class="short">' + short + "</span>";
+      b.textContent = label;
       b.addEventListener("click", function () {
         say(label + "…");
         invoke("gbf_set_mobile_half", { half: half })
@@ -376,10 +407,12 @@
       });
       return b;
     }
-    row.appendChild(sizeOpt("nav-size-full", "Large", "L", false));
-    row.appendChild(sizeOpt("nav-size-half", "Small", "S", true));
+    row.appendChild(sizeOpt("nav-size-full", "Large", false));
+    row.appendChild(sizeOpt("nav-size-half", "Small", true));
+    line.appendChild(ico);
+    line.appendChild(row);
     gs.appendChild(sec);
-    gs.appendChild(row);
+    gs.appendChild(line);
     var ref = document.getElementById("sec-reference");
     if (ref) nav.insertBefore(gs, ref);
     else nav.appendChild(gs);
@@ -441,6 +474,7 @@
       }
       var gs = document.getElementById("game-size");
       if (gs) gs.hidden = !isMobile;
+      document.body.setAttribute("data-mobile-half", st.mobileHalf ? "1" : "0");
       var full = document.getElementById("nav-size-full");
       var half = document.getElementById("nav-size-half");
       if (full) full.classList.toggle("active", isMobile && !st.mobileHalf);
