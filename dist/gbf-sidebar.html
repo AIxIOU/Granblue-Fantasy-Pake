@@ -146,9 +146,9 @@
   body.collapsed #foot { display: none; }
   body.collapsed #top { justify-content: center; padding: 8px 0; }
   body.collapsed .btn { justify-content: center; padding: 8px 0; }
-  /* Transient notice, e.g. a panel asked for under Automatic Resizing.
-     Sits over the nav so a deliberate click gets a deliberate answer --
-     the footer is where diagnostics go, and it is too quiet for this. */
+  /* Transient notice. Sits over the nav so a deliberate click gets a
+     deliberate answer -- the footer is where diagnostics go, and it is
+     too quiet for this. */
   #notice {
     position: fixed;
     left: 8px;
@@ -425,16 +425,7 @@
       var l = document.getElementById("nav-lock");
       if (l) l.classList.toggle("active", !!st.locked);
 
-      // Automatic Resizing has no panels. The wiki needs width we are not
-      // allowed to take there, so its row goes away entirely. Options and
-      // About stay put -- Options is where the tray and layout settings
-      // live, and a row that silently vanishes reads as a bug -- but they
-      // explain themselves instead of opening. See PANEL_NEEDS_FIXED_SIZE.
-      var auto = !!st.automatic;
-      document.body.classList.toggle("automatic", auto);
-
       // Desktop: Layout (Lock to game). Mobile: Game size (Large / Small).
-      // On mobile, GBF's Automatic flag is always 0 — do not hide Wiki for it.
       var isMobile = !!st.mobile;
       document.body.classList.toggle("mobile", isMobile);
       var layoutSec = document.getElementById("sec-layout");
@@ -449,10 +440,6 @@
       var half = document.getElementById("nav-size-half");
       if (full) full.classList.toggle("active", isMobile && !st.mobileHalf);
       if (half) half.classList.toggle("active", isMobile && !!st.mobileHalf);
-      var wikiRow = document.getElementById("nav-wiki");
-      if (wikiRow) wikiRow.hidden = auto && !isMobile;
-      var wikiSec = document.getElementById("sec-reference");
-      if (wikiSec) wikiSec.hidden = auto && !isMobile;
     },
 
     notice: showNotice,

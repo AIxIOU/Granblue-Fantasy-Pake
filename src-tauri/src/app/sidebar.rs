@@ -69,13 +69,12 @@ pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
 pub const MOBILE_USER_AGENT: &str =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1";
 
-/// Shown when a panel is asked for while Granblue is on Automatic Resizing.
-/// Wiki/About/Options tile the game, and tiling needs a window we are allowed
-/// to size -- which under Automatic we are not.
+/// Shown when a panel is asked for while the desktop client is on Automatic
+/// Resizing. That mode is a bare window: no sidebar, no panels.
 /// The `NOTICE ` prefix tells the sidebar page to show this in its banner
 /// rather than dumping it into the diagnostics pane.
 const PANEL_NEEDS_FIXED_SIZE: &str =
-    "NOTICE Wiki, Options and About need a fixed Window Size. Switch Granblue to Small, Medium or Large in its Browser Settings.";
+    "NOTICE Wiki, Options and About are unavailable while the desktop client is on Automatic Resizing.";
 
 /// Granblue's narrowest layout (320 x zoom 1). Never squeeze the game below it.
 const MIN_GAME_WIDTH: f64 = 320.0;
@@ -283,20 +282,15 @@ struct WindowFlags {
     /// event must not be mistaken for the player dragging the frame -- doing so
     /// marks the panel width-borrow as user-owned and it is never given back.
     last_set_phys_w: u32,
-    /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
+    /// Generation for delayed hugs so a drag does not snap mid-pull.
     hug_gen: u64,
-    /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
-    edge_apply_gen: u64,
-    /// Locked + Automatic: do not shrink the game webview below this. The OS
-    /// window may hug; Granblue's viewport must not.
-    game_keep_w: f64,
     /// Wiki panel width in use (960 or 800). 0 = closed / unset.
     wiki_panel_w: f64,
     /// Inner width before we grew the window for the wiki. 0 = none.
     panel_before_w: f64,
     /// Inner width we left after growing for the wiki. 0 = none.
     panel_after_w: f64,
-    /// One hug after a panel open/close, even if Automatic already snapped.
+    /// One hug after a panel open/close.
     panel_hug_due: bool,
     /// User dragged the window while a panel was open; do not restore borrow.
     panel_user_resized: bool,
@@ -510,21 +504,7 @@ impl SidebarState {
         self.with(label, |f| f.hug_gen)
     }
 
-    pub fn bump_edge_apply_gen(&self, label: &str) -> u64 {
-        let mut out = 0;
-        self.update(label, |f| {
-            f.edge_apply_gen = f.edge_apply_gen.wrapping_add(1);
-            out = f.edge_apply_gen;
-        });
-        out
-    }
-
-    pub fn edge_apply_gen(&self, label: &str) -> u64 {
-        self.with(label, |f| f.edge_apply_gen)
-    }
-
-    /// A fixed Size wrap change hugs immediately. Under Automatic nothing
-    /// happens at all: the window is the player's.
+    /// A fixed Size wrap change hugs immediately.
     pub fn note_game_size_change(&self, label: &str, prev_edge: f64, right: f64, now_auto: bool) {
         if !self.is_locked(label) {
             return;
@@ -532,22 +512,6 @@ impl SidebarState {
         if !now_auto && prev_edge > 1.0 && (prev_edge - right).abs() > 40.0 {
             self.set_panel_hug_due(label, true);
         }
-    }
-
-    pub fn game_keep_w(&self, label: &str) -> f64 {
-        self.with(label, |f| f.game_keep_w)
-    }
-
-    pub fn raise_game_keep_w(&self, label: &str, w: f64) {
-        self.update(label, |f| {
-            if w > f.game_keep_w {
-                f.game_keep_w = w;
-            }
-        });
-    }
-
-    pub fn set_game_keep_w(&self, label: &str, w: f64) {
-        self.update(label, |f| f.game_keep_w = w);
     }
 
     pub fn wiki_panel_w(&self, label: &str) -> f64 {
@@ -610,8 +574,7 @@ impl SidebarState {
     }
 
     /// A drag while a panel is open means we must not restore the borrowed
-    /// width. Nothing else: under Automatic we never resize the window, so
-    /// there is no pending hug for a drag to fight.
+    /// width.
     pub fn note_user_resize(&self, label: &str, phys_w: u32) {
         self.update(label, |f| {
             if f.hug_busy {
@@ -662,10 +625,8 @@ impl SidebarState {
         });
     }
 
-    /// Automatic has no panels. Drop every panel flag and the width-borrow
-    /// bookkeeping, without touching the window: the following `layout` hides
-    /// the webviews from these flags, and under Automatic the window is the
-    /// player's to size.
+    /// Desktop Automatic is a bare window. Drop every panel flag and the
+    /// width-borrow bookkeeping; `layout` hides the webviews from these flags.
     fn close_panels_for_automatic(&self, label: &str) -> bool {
         let mut had = false;
         self.update(label, |f| {
@@ -830,9 +791,6 @@ fn column_x(host: &Window, s: &Split) -> f64 {
 }
 
 /// Locked: shrink/grow the OS window so its right edge sits on the sidebar.
-///
-/// Fixed Window Size only. Under Automatic this is a no-op: see the comment
-/// in the body for the measurement that ruled the cap hug out.
 fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
@@ -840,13 +798,6 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
         return Ok(false);
     }
     if state.hug_busy(&label) {
-        return Ok(false);
-    }
-    // The desktop client on Automatic Resizing never gets resized -- it re-fits
-    // and reloads on every width change, so anything we do fights the player.
-    // The mobile client is a fixed layout at a fixed zoom, so it hugs exactly
-    // like a fixed Size.
-    if state.is_automatic(&label) && !state.is_mobile(&label) {
         return Ok(false);
     }
     let _ = state.take_panel_hug_due(&label);
@@ -878,13 +829,10 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     Ok(true)
 }
 
-/// Panels tile the game, which needs a window we are allowed to size. Under the
-/// desktop client's Automatic Resizing we are not, so they are refused there.
-///
-/// The mobile client has no Window Size settings at all -- `mobage_fixwindowsize`
-/// is simply always 0 -- so gating on "Automatic" there would refuse panels
-/// forever, including Options. It is also a fixed 320 layout that never re-fits,
-/// so resizing its viewport costs nothing. Panels are available on mobile.
+/// The desktop client's Automatic Resizing is a bare window, so panels are
+/// refused there. The mobile client has no Window Size settings --
+/// `mobage_fixwindowsize` is always 0 -- so gating on that flag would refuse
+/// panels forever, including Options.
 fn panels_unavailable(app: &AppHandle, label: &str) -> bool {
     let state = app.state::<SidebarState>();
     state.is_automatic(label) && !state.is_mobile(label)
@@ -922,18 +870,12 @@ fn apply_mobile_zoom(host: &Window) -> Option<String> {
     }
 }
 
-/// Granblue switched to Automatic. Panels are unavailable there, so shut any
-/// open one down. State only -- the caller is not guaranteed to be on the main
-/// thread, and the `layout` that follows does the hiding.
+/// Desktop client switched to Automatic. Close any open panel; `layout` hides
+/// the webviews. State only -- the caller is not guaranteed to be on the main
+/// thread.
 fn close_panels_for_automatic(app: &AppHandle, label: &str) {
     let state = app.state::<SidebarState>();
-    if state.close_panels_for_automatic(label) {
-        if let Some(bar) = app.get_window(label).as_ref().and_then(sidebar_webview) {
-            let _ = bar.eval(
-                "window.__gbfSidebar && window.__gbfSidebar.notice &&                  window.__gbfSidebar.notice('Panels closed — Automatic Resizing has no panels.')",
-            );
-        }
-    }
+    let _ = state.close_panels_for_automatic(label);
 }
 
 fn restore_hug_width(host: &Window) -> String {
@@ -1020,9 +962,9 @@ fn needed_for_panel(game_col: f64, panel: f64, collapsed: bool) -> f64 {
     game_col + panel + sidebar_want(collapsed) + WIKI_WIDEN_BUFFER
 }
 
-fn panel_no_room_notice(automatic: bool) -> String {
-    if automatic {
-        "Not enough room. Widen the window, or pick a fixed Window Size in Granblue's Browser Settings.".into()
+fn panel_no_room_notice(mobile: bool) -> String {
+    if mobile {
+        "Not enough room. Widen the window.".into()
     } else {
         "Not enough room. In Granblue's Browser Settings, pick a smaller Window Size.".into()
     }
@@ -1031,8 +973,6 @@ fn panel_no_room_notice(automatic: bool) -> String {
 /// Fit the OS window to `want` logical inner width. Height is echoed so it
 /// cannot drift. Grows when a panel needs room; shrinks leftover when a
 /// smaller panel (or a close) no longer needs the wiki's width.
-/// Under Automatic a size change reloads Granblue — that is GBF's own
-/// behaviour; wiki and About still have to take the width they need.
 fn fit_inner_width(host: &Window, want: f64, allow_shrink: bool) -> tauri::Result<f64> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
@@ -1067,8 +1007,6 @@ fn grow_inner_width(host: &Window, want: f64) -> tauri::Result<f64> {
 }
 
 /// After a panel open/close, hug leftover once Granblue has reflowed.
-/// Does not use the Automatic user-drag hug token, so it still runs after
-/// that token is spent — and it does not hug again on later GBF edge updates.
 fn schedule_panel_hug(host: &Window) {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
@@ -1106,16 +1044,7 @@ fn restore_panel_width(host: &Window) {
         schedule_panel_hug(host);
         return;
     }
-    // Desktop client under Automatic: do not yank back to the pre-panel size.
-    // GBF may have reflowed larger; restoring a stale width clips the sidebar.
-    // Hug leftover to the current column instead.
-    //
-    // The mobile client never reflows -- it is a fixed 320 layout we zoom to
-    // fit -- so there is no stale-width risk and the borrow must be given back.
-    // Without this the window only ever grows: mobage_fixwindowsize is
-    // permanently 0 on mobile, so `automatic` would always be true.
-    let automatic = state.is_automatic(&label) && !state.is_mobile(&label);
-    if !automatic && before > 1.0 {
+    if before > 1.0 {
         let Ok(scale) = host.scale_factor() else {
             schedule_panel_hug(host);
             return;
@@ -1131,16 +1060,7 @@ fn restore_panel_width(host: &Window) {
             let _ = host.set_size(PhysicalSize::new(want_phys, phys.height));
         }
     }
-    if automatic {
-        // Stale keep from the pre-wiki drag is wider than the hugged
-        // window and would paint the game over the sidebar.
-        state.set_game_keep_w(&label, 0.0);
-        state.set_panel_hug_due(&label, true);
-        let _ = layout(host);
-        schedule_panel_hug(host);
-    } else {
-        schedule_panel_hug(host);
-    }
+    schedule_panel_hug(host);
 }
 
 /// Pick the preferred width if the monitor can hold it, else the fallback,
@@ -1153,7 +1073,7 @@ fn prepare_panel_open(
 ) -> Result<String, String> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
-    let automatic = state.is_automatic(&label);
+    let mobile = state.is_mobile(&label);
     let collapsed = state.is_collapsed(&label);
     let game_col = {
         let css = snap_css(&state, &label);
@@ -1178,7 +1098,7 @@ fn prepare_panel_open(
     } else if !collapsed && fits(minimum, true) {
         (minimum, true)
     } else {
-        return Err(panel_no_room_notice(automatic));
+        return Err(panel_no_room_notice(mobile));
     };
 
     let mut note = String::new();
@@ -1205,7 +1125,7 @@ fn prepare_panel_open(
             });
         }
         restore_panel_width(host);
-        return Err(panel_no_room_notice(automatic));
+        return Err(panel_no_room_notice(mobile));
     }
     state.set_wiki_panel_w(&label, reserved);
     schedule_panel_hug(host);
@@ -1315,13 +1235,6 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         ));
     }
 
-    // Past the bare-window check, `automatic` can only still be true on the
-    // mobile client -- and there it means nothing, because the mobile client has
-    // no Window Size settings. Its size is our zoom, which is fixed, so
-    // `#wrapper` is stable and mobile can take exactly the same layout and hug
-    // path as the desktop client's fixed Sizes. Everything below is that path.
-    let automatic = automatic && !state.is_mobile(&label);
-
     let col = column_x(host, &s);
     let edge = state.game_edge(&label);
     let want_w = col + s.wiki_w + s.sidebar_w;
@@ -1334,8 +1247,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     if maybe_hug_window(host, col, &s)? {
         out.push_str("hug: set_size issued\n");
         // Keep going and place the chrome. Returning here left the sidebar
-        // at its pre-hug x, which is off the right edge of the smaller
-        // window (recording 113543: close wiki at Automatic cap).
+        // at its pre-hug x, off the right edge of the smaller window.
     }
 
     let panel_min = if wiki_open {
@@ -1348,21 +1260,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     if (wiki_open || about_open || options_open) && panel_min > 0.0 && s.wiki_w + 1.0 >= panel_min {
         let scale = host.scale_factor()?;
         let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
-        // Tiled: keep the game exactly as wide as it is and widen the window
-        // by the panel. Using `col` here would re-introduce the wrapper loop.
-        // `panel_before_w` is the once-guard: it is set by the grow and cleared
-        // on close, so this cannot fire again on every relayout.
-        let tiled_now = locked && edge > 1.0 && automatic;
-        let already_grown = state.panel_before_w(&label) > 1.0;
-        let want = if tiled_now {
-            if already_grown {
-                0.0
-            } else {
-                inner_w + s.wiki_w + WIKI_WIDEN_BUFFER
-            }
-        } else {
-            col + s.wiki_w + s.sidebar_w + WIKI_WIDEN_BUFFER
-        };
+        let want = col + s.wiki_w + s.sidebar_w + WIKI_WIDEN_BUFFER;
         let ceiling = monitor_inner_ceiling(host);
         if inner_w + HUG_SLACK < want && want <= ceiling + WIKI_TIER_SLACK {
             let after = grow_inner_width(host, want).unwrap_or(inner_w);
@@ -1378,19 +1276,6 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let lock_fill = locked && edge > 1.0;
     let unlock_snap = !locked && snap_css(&state, &label) > 1.0;
     let panel_open = wiki_open || about_open || options_open;
-    // Locked + Automatic: TILE. Granblue's viewport is the window minus the
-    // sidebar, so the sidebar's left edge IS the edge Granblue scales to and
-    // the two can never disagree. The previous model handed Granblue the whole
-    // window and laid the sidebar over it, which is why the sidebar sat wherever
-    // #wrapper happened to end and left a strip -- the strip the hugs existed to
-    // chase.
-    //
-    // Its stated reason ("never shrink Granblue's viewport") did not hold: under
-    // Automatic the game webview WAS the window, so every width change resized it
-    // and reloaded Granblue anyway (marker test: drag under Automatic loses a
-    // marker set on `window`). Reloading to recalculate its width is simply how
-    // Granblue behaves under Automatic Resizing, natively, in an ordinary browser.
-    //
     // Unlocked: tile to the submenu overlay so Chat/Settings is flush with the
     // sidebar. A panel is always a sibling column.
     // The wiki keeps its webview once created, so a closed panel is hidden
@@ -1402,15 +1287,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     } else {
         0.0
     };
-    let game_w = if lock_fill && automatic {
-        // Tiled: game | sidebar | panel, and the game column is whatever the
-        // window has left. It must NOT be derived from #wrapper: under
-        // zoom-to-fit the wrapper fills whatever column it is given, so
-        // deriving the column from it makes the two chase each other. That
-        // loop grew the window to the monitor cap and stranded the sidebar
-        // off-screen at 3127 with a 2324 window.
-        (inner_w - s.sidebar_w - panel_w).max(MIN_GAME_WIDTH)
-    } else if (lock_fill || unlock_snap) && panel_open {
+    let game_w = if (lock_fill || unlock_snap) && panel_open {
         col.max(1.0)
     } else if lock_fill {
         inner_w.max(1.0)
@@ -1437,23 +1314,15 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         }
     }
 
-    // Tiled Automatic: the sidebar owns the right edge of the window, and the
-    // game viewport is everything left of it. Everywhere else the sidebar sits
-    // on the game's own column edge.
-    // Tiled: the sidebar locks to the game's right edge, which with the column
-    // above is also `window - sidebar - panel`. Panels are always projected to
-    // the RIGHT of the sidebar -- never between game and sidebar -- so the
-    // sidebar never moves when one opens.
-    let bar_x = if lock_fill && automatic {
-        (inner_w - s.sidebar_w - panel_w).max(0.0)
-    } else if outside {
+    // The sidebar sits on the game's own column edge. A panel between game
+    // and sidebar (`outside=false`) shifts the bar right; a panel on the
+    // outer edge (`outside=true`) leaves the bar on `col`.
+    let bar_x = if outside {
         col
     } else {
         col + panel_w
     };
-    let panel_x = if lock_fill && automatic {
-        (inner_w - panel_w).max(0.0)
-    } else if outside {
+    let panel_x = if outside {
         col + s.sidebar_w
     } else {
         col
@@ -1529,7 +1398,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},automatic:{automatic},mobile:{mobile},mobileHalf:{mobile_half}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half}}})"
             ));
             let _ = bar.hide();
             let v = bar.show();
@@ -1745,10 +1614,6 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .app_handle()
         .state::<SidebarState>()
         .is_automatic(window.label());
-    let keep = window
-        .app_handle()
-        .state::<SidebarState>()
-        .game_keep_w(window.label());
     let hug_busy = window
         .app_handle()
         .state::<SidebarState>()
@@ -1813,7 +1678,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .page_zoom(window.label());
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nkeep={keep:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nkeep=0\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -1976,10 +1841,8 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
     let label = window.label().to_string();
     let was_open = app.state::<SidebarState>().wiki_is_open(&label);
 
-    // Automatic Resizing has no panels: they tile the game, and under
-    // Automatic we never resize the window to make room. Opening is refused
-    // with a notice; closing still works so a panel left open by a mode
-    // switch can always be shut.
+    // Desktop Automatic is a bare window. Opening is refused with a notice;
+    // closing still works so a panel left open by a mode switch can shut.
     if !was_open && panels_unavailable(&app, &label) {
         return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
     }
@@ -2077,7 +1940,9 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
             .lines()
             .find(|l| l.starts_with("REFUSE "))
             .map(|l| l[7..].to_string())
-            .unwrap_or_else(|| panel_no_room_notice(true)));
+            .unwrap_or_else(|| {
+                panel_no_room_notice(app.state::<SidebarState>().is_mobile(&label))
+            }));
     }
     Ok(format!("wikiOpen=true\n{report}"))
 }
@@ -2091,10 +1956,8 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
     let label = window.label().to_string();
     let was_open = app.state::<SidebarState>().about_is_open(&label);
 
-    // Automatic Resizing has no panels: they tile the game, and under
-    // Automatic we never resize the window to make room. Opening is refused
-    // with a notice; closing still works so a panel left open by a mode
-    // switch can always be shut.
+    // Desktop Automatic is a bare window. Opening is refused with a notice;
+    // closing still works so a panel left open by a mode switch can shut.
     if !was_open && panels_unavailable(&app, &label) {
         return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
     }
@@ -2183,7 +2046,9 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
             .lines()
             .find(|l| l.starts_with("REFUSE "))
             .map(|l| l[7..].to_string())
-            .unwrap_or_else(|| panel_no_room_notice(true)));
+            .unwrap_or_else(|| {
+                panel_no_room_notice(app.state::<SidebarState>().is_mobile(&label))
+            }));
     }
     Ok(format!("aboutOpen=true\n{report}"))
 }
@@ -2195,10 +2060,8 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
     let label = window.label().to_string();
     let was_open = app.state::<SidebarState>().options_is_open(&label);
 
-    // Automatic Resizing has no panels: they tile the game, and under
-    // Automatic we never resize the window to make room. Opening is refused
-    // with a notice; closing still works so a panel left open by a mode
-    // switch can always be shut.
+    // Desktop Automatic is a bare window. Opening is refused with a notice;
+    // closing still works so a panel left open by a mode switch can shut.
     if !was_open && panels_unavailable(&app, &label) {
         return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
     }
@@ -2287,7 +2150,9 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
             .lines()
             .find(|l| l.starts_with("REFUSE "))
             .map(|l| l[7..].to_string())
-            .unwrap_or_else(|| panel_no_room_notice(true)));
+            .unwrap_or_else(|| {
+                panel_no_room_notice(app.state::<SidebarState>().is_mobile(&label))
+            }));
     }
     Ok(format!("optionsOpen=true\n{report}"))
 }
@@ -2379,16 +2244,10 @@ fn set_lock(host: &Window, on: bool) -> String {
     if on {
         host.app_handle()
             .state::<SidebarState>()
-            .set_game_keep_w(host.label(), 0.0);
-        host.app_handle()
-            .state::<SidebarState>()
             .set_panel_hug_due(host.label(), true);
     }
     let mut extra = String::new();
     if !on {
-        host.app_handle()
-            .state::<SidebarState>()
-            .set_game_keep_w(host.label(), 0.0);
         let _ = host
             .app_handle()
             .state::<SidebarState>()
@@ -2540,10 +2399,8 @@ pub fn gbf_game_edge(
     let zoom = zoom.filter(|v| *v > 0.05).unwrap_or(0.0);
     if right <= 1.0 {
         // Reload removes #wrapper for a moment. Keep the last edge instead
-        // of snapping the sidebar to x=0 / tiling the game to Small.
-        // Drop zoom so leftover hug cannot use a stale Large zoom.
+        // of snapping the sidebar to x=0.
         state.set_game_zoom(&label, 0.0);
-        state.bump_edge_apply_gen(&label);
         return Ok(());
     }
     let current_edge = state.game_edge(&label);
@@ -2558,52 +2415,8 @@ pub fn gbf_game_edge(
     if dpr > 0.05 {
         state.set_game_dpr(&label, dpr);
     }
-    let growing = automatic && current_edge > 1.0 && right > current_edge + 80.0;
-    let dropping = automatic && current_edge > 1.0 && right + 80.0 < current_edge;
-    if dropping {
-        state.bump_edge_apply_gen(&label);
-    }
-    if growing {
-        // Reload often paints Large #wrapper for a beat, then Automatic
-        // settles smaller. Wait; a drop cancels this. A held cap applies.
-        let gen = state.bump_edge_apply_gen(&label);
-        let pending_right = right;
-        let pending_zoom = zoom;
-        let pending_overlay = overlay;
-        let handle = app.clone();
-        let win_label = label.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(700));
-            let app = handle.clone();
-            let _ = handle.run_on_main_thread(move || {
-                let state = app.state::<SidebarState>();
-                if state.edge_apply_gen(&win_label) != gen {
-                    return;
-                }
-                if pending_zoom > 0.05 {
-                    state.set_game_zoom(&win_label, pending_zoom);
-                }
-                let prev_edge = state.game_edge(&win_label);
-                let prev_auto = state.is_automatic(&win_label);
-                state.set_game_edge(&win_label, pending_right);
-                state.set_game_overlay(&win_label, pending_overlay);
-                state.note_game_size_change(&win_label, prev_edge, pending_right, true);
-                if !prev_auto {
-                    close_panels_for_automatic(&app, &win_label);
-                }
-                if let Some(host) = app.get_window(&win_label) {
-                    let _ = layout(&host);
-                }
-            });
-        });
-        return Ok(());
-    }
     if zoom > 0.05 {
-        if automatic && zoom >= 1.85 && right < 500.0 {
-            state.set_game_zoom(&label, 1.0);
-        } else {
-            state.set_game_zoom(&label, zoom);
-        }
+        state.set_game_zoom(&label, zoom);
     }
     if same_edge && same_overlay && same_auto && same_dpr {
         return Ok(());
@@ -2611,16 +2424,13 @@ pub fn gbf_game_edge(
     state.set_game_edge(&label, right);
     state.set_game_overlay(&label, overlay);
     state.note_game_size_change(&label, current_edge, right, automatic);
-    if automatic && !prev_auto {
+    // Desktop Automatic is a bare window. Close panels on the switch in.
+    // Mobile reports mobage_fixwindowsize === 0 always; that is not a switch.
+    if automatic && !prev_auto && !state.is_mobile(&label) {
         close_panels_for_automatic(&app, &label);
     }
     if dpr_first || overlay_changed {
-        // Automatic lock: leftover is grow room until GBF hits its cap.
-        // Hugging on every overlay report snaps a width-drag back
-        // (recording 115347). Panel close sets this flag itself.
-        if !(automatic && state.is_locked(&label)) {
-            state.set_panel_hug_due(&label, true);
-        }
+        state.set_panel_hug_due(&label, true);
     }
     let handle = app.clone();
     let win_label = label;

@@ -43,16 +43,14 @@
     var auto = automatic();
     if (auto === null) return;
     // Reload paints #wrapper at the unzoomed 320px base before zoom lands.
-    // Only skip that 320px flash, not Automatic sizes between Small and Large
-    // (320*zoom would ignore wrap 388 while getZoom is still 2).
     var zoom = 1;
     try {
       if (typeof Game.getZoom === "function") zoom = Game.getZoom() || 1;
     } catch (e) {}
     if (zoom > 1.05 && r.right < 340) return;
-    // The mobile client has no #submenu column at all. That is the cleanest
-    // signal for which client we were served, and Rust needs it: on mobile
-    // there are no Window Size settings, so "Automatic" means something else.
+    // The mobile client has no #submenu column. That is the cleanest signal
+    // for which client we were served. On mobile there are no Window Size
+    // settings, so mobage_fixwindowsize is always 0 and is not a size mode.
     t.core.invoke("gbf_game_edge", {
       right: r.right,
       overlay: overlayRight(),
