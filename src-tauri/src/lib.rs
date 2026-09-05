@@ -314,6 +314,7 @@ pub fn run_app() {
             app::sidebar::gbf_debug,
             app::sidebar::gbf_toggle_app_windows,
             app::sidebar::gbf_wiki_toggle,
+            app::sidebar::gbf_about_toggle,
             app::sidebar::gbf_wiki_back,
             app::sidebar::gbf_wiki_home,
             app::sidebar::gbf_toggle_lock,

@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>About this app</title>
+<!--
+  EXPERIMENT ONLY. Local About page in its own webview, so opening it cannot
+  destroy the wiki's page, scroll or history. Served from tauri://localhost.
+-->
+<style>
+  :root {
+    --bg: #14171f;
+    --fg: #e8e2d2;
+    --muted: #cfc7b4;
+    --gold: #f2e2b6;
+    --line: #3a3020;
+    --kbd-border: #5c4a2e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.55 Georgia, "Times New Roman", serif;
+  }
+  #gbf-about-body {
+    padding: 18px 22px 26px;
+    overflow-y: auto;
+    height: 100%;
+  }
+  #gbf-about-body > * { max-width: 620px; }
+  h1 {
+    font-size: 19px; margin: 0 0 6px;
+    color: var(--gold); letter-spacing: .5px;
+  }
+  h2 {
+    font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
+    color: #e9d097; margin: 20px 0 6px;
+    border-bottom: 1px solid rgba(201,169,110,0.35); padding-bottom: 3px;
+  }
+  p.lede { color: var(--muted); margin: 0 0 4px; }
+  ul { margin: 4px 0; padding-left: 18px; }
+  li { margin: 5px 0; }
+  b { color: var(--gold); font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 2px 0; vertical-align: top; }
+  td:last-child { text-align: right; white-space: nowrap; width: 1%; }
+  kbd {
+    display: inline-block; padding: 1px 5px;
+    border: 1px solid var(--kbd-border); border-bottom-width: 2px;
+    border-radius: 3px; background: rgba(0,0,0,0.35);
+    color: var(--gold); font-family: inherit; font-size: 11px;
+  }
+  .badge {
+    display: inline-block; font: 9px/1.2 -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: .5px; color: #0d1017; background: #7aa2f7;
+    padding: 2px 5px; border-radius: 3px; vertical-align: middle;
+  }
+</style>
+<div id="gbf-about-body">
+  <h1>GBF Pake <span class="badge">NATIVE</span></h1>
+  <p class="lede">A desktop wrapper for Granblue Fantasy. This build is an
+  experiment: the sidebar and wiki live in their own webviews beside the game,
+  not inside Granblue's document. The game itself runs exactly as it does in a
+  browser — nothing here modifies it.</p>
+
+  <h2>Keyboard shortcuts</h2>
+  <p class="lede">All of these are <kbd>Alt</kbd>-modified so they cannot shadow
+  Granblue's own keys. They work while the game, the wiki, or this page has
+  focus.</p>
+  <table>
+    <tr><td>Home</td><td><kbd>Alt</kbd>+<kbd>1</kbd></td></tr>
+    <tr><td>Party</td><td><kbd>Alt</kbd>+<kbd>P</kbd></td></tr>
+    <tr><td>Quests</td><td><kbd>Alt</kbd>+<kbd>2</kbd></td></tr>
+    <tr><td>Raids</td><td><kbd>Alt</kbd>+<kbd>3</kbd></td></tr>
+    <tr><td>Co-op</td><td><kbd>Alt</kbd>+<kbd>4</kbd></td></tr>
+    <tr><td>Crew</td><td><kbd>Alt</kbd>+<kbd>5</kbd></td></tr>
+    <tr><td>Supplies</td><td><kbd>Alt</kbd>+<kbd>6</kbd></td></tr>
+    <tr><td>Inventory</td><td><kbd>Alt</kbd>+<kbd>7</kbd></td></tr>
+    <tr><td>Crate</td><td><kbd>Alt</kbd>+<kbd>C</kbd></td></tr>
+    <tr><td>Stash</td><td><kbd>Alt</kbd>+<kbd>S</kbd></td></tr>
+    <tr><td>Profile</td><td><kbd>Alt</kbd>+<kbd>8</kbd></td></tr>
+    <tr><td>Shop</td><td><kbd>Alt</kbd>+<kbd>9</kbd></td></tr>
+    <tr><td>Journey Drops</td><td><kbd>Alt</kbd>+<kbd>0</kbd></td></tr>
+    <tr><td>Arcarum</td><td><kbd>Alt</kbd>+<kbd>-</kbd></td></tr>
+    <tr><td>Alchemy Lab</td><td><kbd>Alt</kbd>+<kbd>=</kbd></td></tr>
+    <tr><td>Trial Battles</td><td><kbd>Alt</kbd>+<kbd>[</kbd></td></tr>
+    <tr><td>Casino</td><td><kbd>Alt</kbd>+<kbd>]</kbd></td></tr>
+    <tr><td>Gacha</td><td><kbd>Alt</kbd>+<kbd>;</kbd></td></tr>
+    <tr><td>Collapse / expand the sidebar</td><td><kbd>Alt</kbd>+<kbd>\</kbd></td></tr>
+    <tr><td>Lock / unlock the chat column</td><td><kbd>Alt</kbd>+<kbd>L</kbd></td></tr>
+    <tr><td>Open / close the wiki</td><td><kbd>Alt</kbd>+<kbd>W</kbd></td></tr>
+  </table>
+
+  <h2>Things you may not have noticed</h2>
+  <ul>
+    <li><b>Drag to scroll.</b> Click and drag anywhere that already scrolls —
+    the game's own pages as well as this sidebar — and it scrolls with the
+    drag, with momentum. A drag never activates the control underneath it.</li>
+    <li><b>Locked mode.</b> Opening the wiki or this page hides Granblue's chat
+    column (<kbd>Alt</kbd>+<kbd>L</kbd> does the same by hand) so the panel
+    uses that space instead of squeezing the game.</li>
+    <li><b>The wiki keeps its place.</b> Close and reopen it and you are on the
+    same page, at the same scroll, because the webview is hidden rather than
+    destroyed. This About page cannot wipe it.</li>
+    <li><b>Reload flash is gone.</b> Granblue can tear its own page down; the
+    sidebar is a different webview and is not rebuilt.</li>
+  </ul>
+
+  <h2>Limitations, and why</h2>
+  <ul>
+    <li><b>With Automatic Resizing on, collapsing the sidebar reloads the
+    game.</b> Changing the game webview's width is a real resize, and Granblue
+    refits itself. Fixed Window Size (Small / Medium / Large) does not reload.
+    This build never resizes the OS window to make room for the wiki.</li>
+    <li><b>macOS and Linux are untested</b> in this experiment. The shipping
+    client is also unverified there.</li>
+  </ul>
+
+  <h2>Granblue is never modified</h2>
+  <p>The app reads the game's layout only where it must, and hides its chat
+  column in locked mode with CSS <code>display</code> only. It never changes
+  the game's settings, its code, or its network traffic.</p>
+</div>

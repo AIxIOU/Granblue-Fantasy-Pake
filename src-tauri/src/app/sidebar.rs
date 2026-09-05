@@ -48,7 +48,8 @@
 //! so tray Hide/Show and the activation shortcut can work. That port is an
 //! upstream-file patch and must be documented if it ever ships.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use tauri::{
     webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview,
     WebviewUrl, WebviewWindow, Window, WindowEvent,
@@ -66,6 +67,10 @@ const WIKI_W: f64 = 460.0;
 /// Below this the wiki is unreadable, so we refuse to open it rather than
 /// showing a squeezed column. Mirrors main's "widen the window" notice.
 const WIKI_MIN_W: f64 = 320.0;
+/// About is a page of text, so it asks for less than the wiki and can open
+/// in windows the wiki refuses.
+const ABOUT_W: f64 = 470.0;
+const ABOUT_MIN_W: f64 = 300.0;
 /// The wiki is loaded directly, as a real page in a real webview.
 const WIKI_URL: &str = "https://gbf.wiki/";
 /// Id of the one style element locked mode adds to Granblue's document.
@@ -84,48 +89,94 @@ pub fn wiki_label(window_label: &str) -> String {
     format!("{window_label}--gbf-wiki")
 }
 
+pub fn about_label(window_label: &str) -> String {
+    format!("{window_label}--gbf-about")
+}
+
+#[derive(Default, Clone, Copy)]
+struct WindowFlags {
+    collapsed: bool,
+    wiki_open: bool,
+    about_open: bool,
+    locked: bool,
+    lock_was_auto: bool,
+}
+
+/// Per-window flags. `--multi-window` must not share collapsed/wiki/lock
+/// across clones.
 #[derive(Default)]
 pub struct SidebarState {
-    collapsed: AtomicBool,
-    wiki_open: AtomicBool,
-    locked: AtomicBool,
-    /// True when the lock was turned on by opening the wiki rather than by the
-    /// player, so closing the wiki knows whether to undo it.
-    lock_was_auto: AtomicBool,
+    by_window: Mutex<HashMap<String, WindowFlags>>,
 }
 
 impl SidebarState {
-    pub fn is_collapsed(&self) -> bool {
-        self.collapsed.load(Ordering::Relaxed)
+    fn with<R>(&self, label: &str, f: impl FnOnce(&WindowFlags) -> R) -> R {
+        let map = self.by_window.lock().unwrap_or_else(|e| e.into_inner());
+        f(map.get(label).unwrap_or(&WindowFlags::default()))
     }
 
-    /// Flip and return the NEW value.
-    pub fn toggle(&self) -> bool {
-        !self.collapsed.fetch_xor(true, Ordering::Relaxed)
+    fn update(&self, label: &str, f: impl FnOnce(&mut WindowFlags)) {
+        let mut map = self.by_window.lock().unwrap_or_else(|e| e.into_inner());
+        f(map.entry(label.to_string()).or_default());
     }
 
-    pub fn wiki_is_open(&self) -> bool {
-        self.wiki_open.load(Ordering::Relaxed)
+    pub fn is_collapsed(&self, label: &str) -> bool {
+        self.with(label, |f| f.collapsed)
     }
 
-    pub fn set_wiki_open(&self, open: bool) {
-        self.wiki_open.store(open, Ordering::Relaxed);
+    pub fn toggle(&self, label: &str) -> bool {
+        let mut out = false;
+        self.update(label, |f| {
+            f.collapsed = !f.collapsed;
+            out = f.collapsed;
+        });
+        out
     }
 
-    pub fn is_locked(&self) -> bool {
-        self.locked.load(Ordering::Relaxed)
+    pub fn wiki_is_open(&self, label: &str) -> bool {
+        self.with(label, |f| f.wiki_open)
     }
 
-    pub fn set_locked(&self, on: bool) {
-        self.locked.store(on, Ordering::Relaxed);
+    pub fn set_wiki_open(&self, label: &str, open: bool) {
+        self.update(label, |f| {
+            f.wiki_open = open;
+            if open {
+                f.about_open = false;
+            }
+        });
     }
 
-    pub fn lock_was_auto(&self) -> bool {
-        self.lock_was_auto.load(Ordering::Relaxed)
+    pub fn about_is_open(&self, label: &str) -> bool {
+        self.with(label, |f| f.about_open)
     }
 
-    pub fn set_lock_was_auto(&self, on: bool) {
-        self.lock_was_auto.store(on, Ordering::Relaxed);
+    pub fn set_about_open(&self, label: &str, open: bool) {
+        self.update(label, |f| {
+            f.about_open = open;
+            if open {
+                f.wiki_open = false;
+            }
+        });
+    }
+
+    pub fn panel_is_open(&self, label: &str) -> bool {
+        self.with(label, |f| f.wiki_open || f.about_open)
+    }
+
+    pub fn is_locked(&self, label: &str) -> bool {
+        self.with(label, |f| f.locked)
+    }
+
+    pub fn set_locked(&self, label: &str, on: bool) {
+        self.update(label, |f| f.locked = on);
+    }
+
+    pub fn lock_was_auto(&self, label: &str) -> bool {
+        self.with(label, |f| f.lock_was_auto)
+    }
+
+    pub fn set_lock_was_auto(&self, label: &str, on: bool) {
+        self.update(label, |f| f.lock_was_auto = on);
     }
 }
 
@@ -143,6 +194,11 @@ fn sidebar_webview(host: &Window) -> Option<Webview> {
 
 fn wiki_webview(host: &Window) -> Option<Webview> {
     let label = wiki_label(host.label());
+    host.webviews().into_iter().find(|w| w.label() == label)
+}
+
+fn about_webview(host: &Window) -> Option<Webview> {
+    let label = about_label(host.label());
     host.webviews().into_iter().find(|w| w.label() == label)
 }
 
@@ -164,7 +220,7 @@ struct Split {
 /// wiki is the only one that can be squeezed to nothing, which is why
 /// `gbf_wiki_toggle` refuses to open below `WIKI_MIN_W` instead of showing an
 /// unreadable column.
-fn split(host: &Window, collapsed: bool, wiki_open: bool) -> tauri::Result<Split> {
+fn split(host: &Window, collapsed: bool, wiki_open: bool, about_open: bool) -> tauri::Result<Split> {
     let scale = host.scale_factor()?;
     let size = host.inner_size()?.to_logical::<f64>(scale);
 
@@ -173,15 +229,13 @@ fn split(host: &Window, collapsed: bool, wiki_open: bool) -> tauri::Result<Split
     } else {
         SIDEBAR_W
     };
-    // The game always wins a fight for space. If the window is too narrow to
-    // hold both, the sidebar gives up width rather than crushing the game --
-    // the reverse of the in-page version, where the sidebar could not be
-    // narrower than its own content.
     let sidebar_w = want_bar.min((size.width - MIN_GAME_WIDTH).max(0.0));
 
-    let room_for_wiki = (size.width - MIN_GAME_WIDTH - sidebar_w).max(0.0);
-    let wiki_w = if wiki_open {
-        WIKI_W.min(room_for_wiki)
+    let room_for_panel = (size.width - MIN_GAME_WIDTH - sidebar_w).max(0.0);
+    let wiki_w = if about_open {
+        ABOUT_W.min(room_for_panel)
+    } else if wiki_open {
+        WIKI_W.min(room_for_panel)
     } else {
         0.0
     };
@@ -217,10 +271,12 @@ fn wiki_room(host: &Window, collapsed: bool) -> tauri::Result<f64> {
 /// that Patch 2 in GBF_Pake_UPSTREAM_PATCHES.md exists to fix cannot occur here.
 pub fn layout(host: &Window) -> tauri::Result<()> {
     let state = host.app_handle().state::<SidebarState>();
-    let collapsed = state.is_collapsed();
-    let wiki_open = state.wiki_is_open();
-    let locked = state.is_locked();
-    let s = split(host, collapsed, wiki_open)?;
+    let label = host.label().to_string();
+    let collapsed = state.is_collapsed(&label);
+    let wiki_open = state.wiki_is_open(&label);
+    let about_open = state.about_is_open(&label);
+    let locked = state.is_locked(&label);
+    let s = split(host, collapsed, wiki_open, about_open)?;
     if s.height <= 0.0 {
         return Ok(()); // minimized; the next Resized event carries real numbers
     }
@@ -244,13 +300,23 @@ pub fn layout(host: &Window) -> tauri::Result<()> {
         }
     }
 
+    if let Some(about) = about_webview(host) {
+        if about_open && s.wiki_w > 0.0 {
+            about.set_position(LogicalPosition::new(s.game_w, 0.0))?;
+            about.set_size(LogicalSize::new(s.wiki_w, s.height))?;
+            let _ = about.show();
+        } else {
+            let _ = about.hide();
+        }
+    }
+
     if let Some(bar) = sidebar_webview(host) {
         bar.set_position(LogicalPosition::new(s.game_w + s.wiki_w, 0.0))?;
         bar.set_size(LogicalSize::new(s.sidebar_w, s.height))?;
         // Rust owns both flags; the page only renders them. One source of
         // truth, so the two can never disagree.
         let _ = bar.eval(format!(
-            "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},locked:{locked}}})"
+            "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},locked:{locked}}})"
         ));
     }
     Ok(())
@@ -264,15 +330,17 @@ pub fn layout(host: &Window) -> tauri::Result<()> {
 /// the only way to see what actually happened.
 fn layout_verbose(host: &Window) -> String {
     let state = host.app_handle().state::<SidebarState>();
-    let collapsed = state.is_collapsed();
-    let wiki_open = state.wiki_is_open();
-    let sp = match split(host, collapsed, wiki_open) {
+    let label = host.label().to_string();
+    let collapsed = state.is_collapsed(&label);
+    let wiki_open = state.wiki_is_open(&label);
+    let about_open = state.about_is_open(&label);
+    let sp = match split(host, collapsed, wiki_open, about_open) {
         Ok(v) => v,
         Err(e) => return format!("split ERR {e}"),
     };
 
     let mut out = format!(
-        "want game={:.0} wiki={:.0} bar={:.0} h={:.0}
+        "want game={:.0} panel={:.0} bar={:.0} h={:.0} wiki={wiki_open} about={about_open}
 ",
         sp.game_w, sp.wiki_w, sp.sidebar_w, sp.height
     );
@@ -316,15 +384,35 @@ fn layout_verbose(host: &Window) -> String {
         }
     }
 
+    match about_webview(host) {
+        None => out.push_str("about: not created\n"),
+        Some(about) => {
+            if about_open && sp.wiki_w > 0.0 {
+                let p = about.set_position(LogicalPosition::new(sp.game_w, 0.0));
+                let z = about.set_size(LogicalSize::new(sp.wiki_w, sp.height));
+                let v = about.show();
+                out.push_str(&format!(
+                    "about pos={} size={} show={} now={}\n",
+                    result_word(&p),
+                    result_word(&z),
+                    result_word(&v),
+                    bounds_word(&about),
+                ));
+            } else {
+                out.push_str(&format!("about hide={}\n", result_word(&about.hide())));
+            }
+        }
+    }
+
     match sidebar_webview(host) {
         None => out.push_str("sidebar webview NOT FOUND
 "),
         Some(bar) => {
             let p = bar.set_position(LogicalPosition::new(sp.game_w + sp.wiki_w, 0.0));
             let z = bar.set_size(LogicalSize::new(sp.sidebar_w, sp.height));
-            let locked = host.app_handle().state::<SidebarState>().is_locked();
+            let locked = host.app_handle().state::<SidebarState>().is_locked(host.label());
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},locked:{locked}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},locked:{locked}}})"
             ));
             out.push_str(&format!(
                 "bar pos={} size={} eval={} now={}
@@ -359,7 +447,7 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     let label = sidebar_label(window.label());
     let host = window.as_ref().window();
 
-    let sp = split(&host, false, false)?;
+    let sp = split(&host, false, false, false)?;
 
     // Served from the bundled assets as tauri://localhost/gbf-sidebar.html, so
     // it is trusted local content with a working IPC bridge. It is deliberately
@@ -379,6 +467,9 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     // event loop starts. See create_wiki().
     if let Err(error) = create_wiki(&host, &sp) {
         eprintln!("[Pake][gbf] could not create the wiki webview: {error}");
+    }
+    if let Err(error) = create_about(&host, &sp) {
+        eprintln!("[Pake][gbf] could not create the about webview: {error}");
     }
 
     layout(&host)?;
@@ -423,7 +514,7 @@ pub fn gbf_nav(window: Window, hash: String) -> Result<(), String> {
 #[tauri::command]
 pub fn gbf_toggle_sidebar(window: Window) -> Result<String, String> {
     let app = window.app_handle().clone();
-    let collapsed = app.state::<SidebarState>().toggle();
+    let collapsed = app.state::<SidebarState>().toggle(window.label());
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let handle = app.clone();
@@ -467,7 +558,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let scale = window.scale_factor().unwrap_or(-1.0);
     let phys = window.inner_size().map_err(|e| e.to_string())?;
     let logical = phys.to_logical::<f64>(if scale > 0.0 { scale } else { 1.0 });
-    let collapsed = window.app_handle().state::<SidebarState>().is_collapsed();
+    let collapsed = window.app_handle().state::<SidebarState>().is_collapsed(window.label());
 
     let report = format!(
         "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}",
@@ -533,7 +624,8 @@ fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
     let label = wiki_label(host.label());
     let blank = Url::parse("about:blank").expect("about:blank parses");
     host.add_child(
-        WebviewBuilder::new(&label, WebviewUrl::External(blank)),
+        WebviewBuilder::new(&label, WebviewUrl::External(blank))
+            .initialization_script(include_str!("../inject/gbf-keys.js")),
         LogicalPosition::new(sp.game_w, 0.0),
         LogicalSize::new(WIKI_W, sp.height),
     )?;
@@ -543,22 +635,51 @@ fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
     Ok(())
 }
 
+fn create_about(host: &Window, sp: &Split) -> tauri::Result<()> {
+    let label = about_label(host.label());
+    host.add_child(
+        WebviewBuilder::new(&label, WebviewUrl::App("gbf-about.html".into()))
+            .initialization_script(include_str!("../inject/gbf-keys.js")),
+        LogicalPosition::new(sp.game_w, 0.0),
+        LogicalSize::new(ABOUT_W, sp.height),
+    )?;
+    if let Some(w) = about_webview(host) {
+        let _ = w.hide();
+    }
+    Ok(())
+}
+
+fn apply_panel_lock(host: &Window, opening: bool) -> String {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    if opening {
+        if !state.is_locked(&label) {
+            state.set_lock_was_auto(&label, true);
+            return format!("{}\n", set_lock(host, true));
+        }
+        return String::new();
+    }
+    if !state.panel_is_open(&label) && state.lock_was_auto(&label) {
+        state.set_lock_was_auto(&label, false);
+        return format!("{}\n", set_lock(host, false));
+    }
+    String::new()
+}
+
 /// Open or close the wiki panel. Returns a narrated report.
 ///
 /// Created lazily on first open, then kept and hidden -- so the page you were
 /// reading, its scroll position and its history all survive closing and
-/// reopening, and survive the game reloading beside it.
+/// reopening, and survive the game reloading beside it. Opening About while
+/// the wiki is up switches the column; the wiki webview stays loaded.
 #[tauri::command]
 pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
     let app = window.app_handle().clone();
-    let collapsed = app.state::<SidebarState>().is_collapsed();
-    let was_open = app.state::<SidebarState>().wiki_is_open();
+    let label = window.label().to_string();
+    let collapsed = app.state::<SidebarState>().is_collapsed(&label);
+    let was_open = app.state::<SidebarState>().wiki_is_open(&label);
 
     if !was_open {
-        // Refuse rather than showing an unreadable column. This is the native
-        // equivalent of main's "widen the window to open the wiki" notice --
-        // and unlike main we never resize the window to make room, because
-        // under Automatic Resizing that would reload the game.
         let room = wiki_room(&window, collapsed).map_err(|e| e.to_string())?;
         if room < WIKI_MIN_W {
             return Err(format!(
@@ -567,58 +688,33 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
             ));
         }
     }
-    app.state::<SidebarState>().set_wiki_open(!was_open);
+    app.state::<SidebarState>().set_wiki_open(&label, !was_open);
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let handle = app.clone();
-    let label = window.label().to_string();
+    let win_label = label.clone();
 
     app.run_on_main_thread(move || {
-        let report = match handle.get_window(&label) {
+        let report = match handle.get_window(&win_label) {
             Some(host) => {
                 let mut out = String::new();
-                let open_now = handle.state::<SidebarState>().wiki_is_open();
-
-                // The wiki takes the space locked mode reclaims, exactly as on
-                // main. Without this it takes width from the game instead and
-                // pushes Granblue below what its Window Size needs, clipping
-                // the very column we are hiding.
+                let open_now = handle.state::<SidebarState>().wiki_is_open(&win_label);
+                out.push_str(&apply_panel_lock(&host, open_now));
                 if open_now {
-                    if !handle.state::<SidebarState>().is_locked() {
-                        handle.state::<SidebarState>().set_lock_was_auto(true);
-                        out.push_str(&set_lock(&host, true));
-                        out.push_str("\n");
-                    }
-                } else if handle.state::<SidebarState>().lock_was_auto() {
-                    // Only undo a lock the wiki turned on itself.
-                    handle.state::<SidebarState>().set_lock_was_auto(false);
-                    out.push_str(&set_lock(&host, false));
-                    out.push_str("\n");
-                }
-
-                if open_now {
-                    // First open: the webview exists but is still on
-                    // about:blank. Navigating is safe from here; creating it
-                    // would not be.
                     if let Some(w) = wiki_webview(&host) {
-                        let blank = w
-                            .url()
-                            .map(|u| u.scheme() == "about")
-                            .unwrap_or(true);
+                        let blank = w.url().map(|u| u.scheme() == "about").unwrap_or(true);
                         if blank {
                             let url = Url::parse(WIKI_URL).expect("wiki url parses");
-                            out.push_str(&format!("navigate={}
-", result_word(&w.navigate(url))));
+                            out.push_str(&format!("navigate={}\n", result_word(&w.navigate(url))));
                         }
                     } else {
-                        out.push_str("wiki webview MISSING
-");
+                        out.push_str("wiki webview MISSING\n");
                     }
                 }
                 out.push_str(&layout_verbose(&host));
                 out
             }
-            None => format!("get_window({label}) -> None"),
+            None => format!("get_window({win_label}) -> None"),
         };
         let _ = tx.send(report);
     })
@@ -628,8 +724,52 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
         .recv_timeout(std::time::Duration::from_secs(8))
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
 
-    Ok(format!("wikiOpen={}
-{report}", !was_open))
+    Ok(format!("wikiOpen={}\n{report}", !was_open))
+}
+
+/// Open or close the About page. Own webview, so it cannot destroy the wiki.
+#[tauri::command]
+pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    let collapsed = app.state::<SidebarState>().is_collapsed(&label);
+    let was_open = app.state::<SidebarState>().about_is_open(&label);
+
+    if !was_open {
+        let room = wiki_room(&window, collapsed).map_err(|e| e.to_string())?;
+        if room < ABOUT_MIN_W {
+            return Err(format!(
+                "Not enough room for About. Widen the window by about {:.0}px, or collapse the sidebar.",
+                (ABOUT_MIN_W - room).ceil()
+            ));
+        }
+    }
+    app.state::<SidebarState>().set_about_open(&label, !was_open);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = label.clone();
+
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            Some(host) => {
+                let mut out = String::new();
+                let open_now = handle.state::<SidebarState>().about_is_open(&win_label);
+                out.push_str(&apply_panel_lock(&host, open_now));
+                out.push_str(&layout_verbose(&host));
+                out
+            }
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+
+    Ok(format!("aboutOpen={}\n{report}", !was_open))
 }
 
 /// Step the wiki's own history back. It has real history because it is a real
@@ -678,14 +818,17 @@ fn lock_js(on: bool) -> String {
 /// Called on every page load as well as on toggle, because Granblue rebuilds
 /// its document on each navigation and takes our style element with it.
 pub fn reapply_lock(webview: &Webview) {
-    let locked = webview.app_handle().state::<SidebarState>().is_locked();
+    let label = webview.window().label().to_string();
+    let locked = webview.app_handle().state::<SidebarState>().is_locked(&label);
     if let Err(error) = webview.eval(lock_js(locked)) {
         eprintln!("[Pake][gbf] could not reapply locked mode: {error}");
     }
 }
 
 fn set_lock(host: &Window, on: bool) -> String {
-    host.app_handle().state::<SidebarState>().set_locked(on);
+    host.app_handle()
+        .state::<SidebarState>()
+        .set_locked(host.label(), on);
     match game_webview(host) {
         Some(game) => format!("lock({on})={}", result_word(&game.eval(lock_js(on)))),
         None => "lock: game webview NOT FOUND".to_string(),
@@ -696,11 +839,9 @@ fn set_lock(host: &Window, on: bool) -> String {
 #[tauri::command]
 pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
     let app = window.app_handle().clone();
-    let now = !app.state::<SidebarState>().is_locked();
-    // A manual toggle takes ownership of the lock away from the wiki, so
-    // closing the wiki will not undo what the player just asked for.
-    app.state::<SidebarState>().set_lock_was_auto(false);
+    let label = window.label().to_string();
+    let now = !app.state::<SidebarState>().is_locked(&label);
+    app.state::<SidebarState>().set_lock_was_auto(&label, false);
     let report = set_lock(&window, now);
-    Ok(format!("locked={now}
-{report}"))
+    Ok(format!("locked={now}\n{report}"))
 }

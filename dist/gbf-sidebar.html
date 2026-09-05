@@ -158,7 +158,8 @@
     { section: "Reference" },
     // Not a Granblue hash. Opens the wiki, which is its own webview pointed
     // straight at gbf.wiki -- a real page, not an iframe.
-    { label: "Wiki", cmd: "gbf_wiki_toggle", id: "nav-wiki", icon: "⊞", key: "W" }
+    { label: "Wiki", cmd: "gbf_wiki_toggle", id: "nav-wiki", icon: "⊞", key: "W" },
+    { label: "About", cmd: "gbf_about_toggle", id: "nav-about", icon: "ⓘ" }
   ];
 
   // This webview is not exposed as a CDP target, so its console cannot be read
@@ -262,7 +263,8 @@
     invoke("gbf_wiki_home").catch(function (e) { say(String(e)); });
   });
   document.getElementById("wclose").addEventListener("click", function () {
-    invoke("gbf_wiki_toggle")
+    var cmd = window.__gbfPanel && window.__gbfPanel.about ? "gbf_about_toggle" : "gbf_wiki_toggle";
+    invoke(cmd)
       .then(dump)
       .catch(function (e) { say(String(e && e.message ? e.message : e)); });
   });
@@ -282,10 +284,17 @@
     setState: function (st) {
       st = st || {};
       document.body.classList.toggle("collapsed", !!st.collapsed);
+      window.__gbfPanel = { wiki: !!st.wikiOpen, about: !!st.aboutOpen };
       var bar = document.getElementById("wikibar");
-      if (bar) bar.hidden = !st.wikiOpen;
+      if (bar) bar.hidden = !(st.wikiOpen || st.aboutOpen);
+      var back = document.getElementById("wback");
+      var home = document.getElementById("whome");
+      if (back) back.hidden = !st.wikiOpen;
+      if (home) home.hidden = !st.wikiOpen;
       var w = document.getElementById("nav-wiki");
       if (w) w.classList.toggle("active", !!st.wikiOpen);
+      var a = document.getElementById("nav-about");
+      if (a) a.classList.toggle("active", !!st.aboutOpen);
       var l = document.getElementById("nav-lock");
       if (l) l.classList.toggle("active", !!st.locked);
     },
@@ -295,13 +304,20 @@
     }
   };
 
-  // Shortcuts work while the sidebar has focus. Focus routing across two
-  // webviews is a known open question for this experiment -- see the README.
-  document.addEventListener("keydown", function (e) {
+    // Shortcuts also live in gbf-keys.js (game/wiki/about). This copy covers
+    // the sidebar document so it does not depend on that script.
+    document.addEventListener("keydown", function (e) {
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
     if (e.key === "l" || e.key === "L") {
       e.preventDefault();
       invoke("gbf_toggle_lock")
+        .then(dump)
+        .catch(function (er) { say(String(er && er.message ? er.message : er)); });
+      return;
+    }
+    if (e.key === "\\") {
+      e.preventDefault();
+      invoke("gbf_toggle_sidebar")
         .then(dump)
         .catch(function (er) { say(String(er && er.message ? er.message : er)); });
       return;
