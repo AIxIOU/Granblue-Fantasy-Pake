@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "pake-capability",
   "description": "Capability for the pake app.",
-    "webviews": ["pake", "pake*", "*--gbf-sidebar", "*--gbf-wiki", "*--gbf-about"],
+    "webviews": ["pake", "pake*", "*--gbf-sidebar", "*--gbf-wiki", "*--gbf-about", "*--gbf-options"],
   "remote": {
     "urls": ["https://*.*"]
   },

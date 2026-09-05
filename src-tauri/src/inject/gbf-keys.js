@@ -1,5 +1,5 @@
 // EXPERIMENT ONLY. Alt-modified shortcuts (Rule 0 exception 5) so they fire
-// in whichever webview has focus — game, wiki, or About — not only the sidebar.
+// in whichever webview has focus — game, wiki, About, or Options — not only the sidebar.
 (function () {
   if (window.__gbfNativeKeys) return;
   window.__gbfNativeKeys = true;
@@ -54,7 +54,7 @@
         return;
       }
       // Same as main (exception 5): reload and back apply to whichever
-      // webview has focus — game, wiki, or About — not the OS window.
+      // webview has focus — game, wiki, About, or Options — not the OS window.
       if (e.key === "r" || e.key === "R") {
         e.preventDefault();
         location.reload();

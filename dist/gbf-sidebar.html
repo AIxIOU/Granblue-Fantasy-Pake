@@ -116,7 +116,7 @@
 <div id="wikibar" hidden>
   <button class="wbtn" id="wback" title="Back in the wiki">&#8592;</button>
   <button class="wbtn" id="whome" title="Wiki front page">&#8962;</button>
-  <button class="wbtn" id="wclose" title="Close the wiki (Alt+W)">&#10005;</button>
+  <button class="wbtn" id="wclose" title="Close this panel">&#10005;</button>
 </div>
 <div id="nav"></div>
 <div id="foot">starting…</div>
@@ -153,13 +153,12 @@
     // Matches main: hide the chat column (exception 2) and snap the sidebar's
     // left edge to #wrapper's right edge. Alt+L.
     { label: "Lock to game", cmd: "gbf_toggle_lock", id: "nav-lock", icon: "🔒", key: "L" },
-    { label: "Wiki/About inside", cmd: "gbf_set_wiki_outside", args: { outside: false }, id: "nav-wiki-in", icon: "⊢" },
-    { label: "Wiki/About outside", cmd: "gbf_set_wiki_outside", args: { outside: true }, id: "nav-wiki-out", icon: "⊣" },
 
     { section: "Reference" },
-    // Not a Granblue hash. Opens the wiki, which is its own webview pointed
-    // straight at gbf.wiki -- a real page, not an iframe.
     { label: "Wiki", cmd: "gbf_wiki_toggle", id: "nav-wiki", icon: "⊞", key: "W" },
+
+    { section: "App" },
+    { label: "Options", cmd: "gbf_options_toggle", id: "nav-options", icon: "⚙" },
     { label: "About", cmd: "gbf_about_toggle", id: "nav-about", icon: "ⓘ" }
   ];
 
@@ -264,7 +263,8 @@
     invoke("gbf_wiki_home").catch(function (e) { say(String(e)); });
   });
   document.getElementById("wclose").addEventListener("click", function () {
-    var cmd = window.__gbfPanel && window.__gbfPanel.about ? "gbf_about_toggle" : "gbf_wiki_toggle";
+    var p = window.__gbfPanel || {};
+    var cmd = p.options ? "gbf_options_toggle" : p.about ? "gbf_about_toggle" : "gbf_wiki_toggle";
     invoke(cmd)
       .then(dump)
       .catch(function (e) { say(String(e && e.message ? e.message : e)); });
@@ -285,9 +285,9 @@
     setState: function (st) {
       st = st || {};
       document.body.classList.toggle("collapsed", !!st.collapsed);
-      window.__gbfPanel = { wiki: !!st.wikiOpen, about: !!st.aboutOpen };
+      window.__gbfPanel = { wiki: !!st.wikiOpen, about: !!st.aboutOpen, options: !!st.optionsOpen };
       var bar = document.getElementById("wikibar");
-      if (bar) bar.hidden = !(st.wikiOpen || st.aboutOpen);
+      if (bar) bar.hidden = !(st.wikiOpen || st.aboutOpen || st.optionsOpen);
       var back = document.getElementById("wback");
       var home = document.getElementById("whome");
       if (back) back.hidden = !st.wikiOpen;
@@ -296,12 +296,10 @@
       if (w) w.classList.toggle("active", !!st.wikiOpen);
       var a = document.getElementById("nav-about");
       if (a) a.classList.toggle("active", !!st.aboutOpen);
+      var o = document.getElementById("nav-options");
+      if (o) o.classList.toggle("active", !!st.optionsOpen);
       var l = document.getElementById("nav-lock");
       if (l) l.classList.toggle("active", !!st.locked);
-      var inn = document.getElementById("nav-wiki-in");
-      var out = document.getElementById("nav-wiki-out");
-      if (inn) inn.classList.toggle("active", !st.wikiOutside);
-      if (out) out.classList.toggle("active", !!st.wikiOutside);
     },
     // Kept so an older Rust build still works against this page.
     setCollapsed: function (on) {

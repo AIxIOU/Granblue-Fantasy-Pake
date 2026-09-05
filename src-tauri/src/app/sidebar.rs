@@ -63,8 +63,9 @@ pub const SIDEBAR_W: f64 = 250.0;
 pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
 /// Granblue's narrowest layout (320 x zoom 1). Never squeeze the game below it.
 const MIN_GAME_WIDTH: f64 = 320.0;
-/// Preferred reading width for the wiki panel (gbf.wiki desktop layout).
-const WIKI_W: f64 = 960.0;
+/// Preferred reading width for the wiki panel. 960 left Extra Drop Raids
+/// cramped against the article edge; 1200 gives that widget a full row.
+const WIKI_W: f64 = 1200.0;
 /// Fallback wiki width: still no overlap or horizontal scroll on gbf.wiki.
 const WIKI_MIN_W: f64 = 800.0;
 /// Accept a preferred tier a few pixels short rather than dropping to 800.
@@ -95,6 +96,10 @@ pub fn wiki_label(window_label: &str) -> String {
 
 pub fn about_label(window_label: &str) -> String {
     format!("{window_label}--gbf-about")
+}
+
+pub fn options_label(window_label: &str) -> String {
+    format!("{window_label}--gbf-options")
 }
 
 /// Separate from `.window-state.json` so extra keys cannot break the plugin's
@@ -175,7 +180,8 @@ struct WindowFlags {
     collapsed: bool,
     wiki_open: bool,
     about_open: bool,
-    /// Wiki/About sit to the right of the sidebar (live-client order).
+    options_open: bool,
+    /// Wiki/About/Options sit to the right of the sidebar (live-client order).
     /// False = between the game and the sidebar.
     wiki_outside: bool,
     locked: bool,
@@ -255,6 +261,7 @@ impl SidebarState {
             f.wiki_open = open;
             if open {
                 f.about_open = false;
+                f.options_open = false;
             }
         });
     }
@@ -268,12 +275,27 @@ impl SidebarState {
             f.about_open = open;
             if open {
                 f.wiki_open = false;
+                f.options_open = false;
+            }
+        });
+    }
+
+    pub fn options_is_open(&self, label: &str) -> bool {
+        self.with(label, |f| f.options_open)
+    }
+
+    pub fn set_options_open(&self, label: &str, open: bool) {
+        self.update(label, |f| {
+            f.options_open = open;
+            if open {
+                f.wiki_open = false;
+                f.about_open = false;
             }
         });
     }
 
     pub fn panel_is_open(&self, label: &str) -> bool {
-        self.with(label, |f| f.wiki_open || f.about_open)
+        self.with(label, |f| f.wiki_open || f.about_open || f.options_open)
     }
 
     pub fn is_locked(&self, label: &str) -> bool {
@@ -436,7 +458,7 @@ impl SidebarState {
             if f.hug_busy {
                 return;
             }
-            if f.wiki_open || f.about_open {
+            if f.wiki_open || f.about_open || f.options_open {
                 f.panel_user_resized = true;
             }
             if !f.locked || !f.automatic {
@@ -484,7 +506,7 @@ impl SidebarState {
 
     fn restore_collapse_for_panel(&self, label: &str) {
         self.update(label, |f| {
-            if f.collapsed_for_panel && !f.wiki_open && !f.about_open {
+            if f.collapsed_for_panel && !f.wiki_open && !f.about_open && !f.options_open {
                 f.collapsed = false;
                 f.collapsed_for_panel = false;
             }
@@ -514,6 +536,11 @@ fn about_webview(host: &Window) -> Option<Webview> {
     host.webviews().into_iter().find(|w| w.label() == label)
 }
 
+fn options_webview(host: &Window) -> Option<Webview> {
+    let label = options_label(host.label());
+    host.webviews().into_iter().find(|w| w.label() == label)
+}
+
 /// The window's client area divided between the three webviews.
 ///
 /// Left to right: game | wiki | sidebar. The wiki sits next to the sidebar
@@ -532,7 +559,13 @@ struct Split {
 /// wiki is the only one that can be squeezed to nothing, which is why
 /// `gbf_wiki_toggle` refuses to open below `WIKI_MIN_W` instead of showing an
 /// unreadable column.
-fn split(host: &Window, collapsed: bool, wiki_open: bool, about_open: bool) -> tauri::Result<Split> {
+fn split(
+    host: &Window,
+    collapsed: bool,
+    wiki_open: bool,
+    about_open: bool,
+    options_open: bool,
+) -> tauri::Result<Split> {
     let scale = host.scale_factor()?;
     let size = host.inner_size()?.to_logical::<f64>(scale);
 
@@ -544,12 +577,14 @@ fn split(host: &Window, collapsed: bool, wiki_open: bool, about_open: bool) -> t
     let sidebar_w = want_bar.min((size.width - MIN_GAME_WIDTH).max(0.0));
 
     let room_for_panel = (size.width - MIN_GAME_WIDTH - sidebar_w).max(0.0);
-    let want_panel = if about_open || wiki_open {
+    let slim = about_open || options_open;
+    let panel_open = wiki_open || slim;
+    let want_panel = if panel_open {
         let chosen = host
             .app_handle()
             .state::<SidebarState>()
             .wiki_panel_w(host.label());
-        let fallback = if about_open { ABOUT_W } else { WIKI_W };
+        let fallback = if slim { ABOUT_W } else { WIKI_W };
         if chosen > 1.0 {
             chosen
         } else {
@@ -558,7 +593,7 @@ fn split(host: &Window, collapsed: bool, wiki_open: bool, about_open: bool) -> t
     } else {
         0.0
     };
-    let wiki_w = if about_open || wiki_open {
+    let wiki_w = if panel_open {
         want_panel.min(room_for_panel)
     } else {
         0.0
@@ -969,6 +1004,10 @@ fn prepare_about_open(host: &Window) -> Result<String, String> {
     prepare_panel_open(host, ABOUT_W, ABOUT_MIN_W, "about")
 }
 
+fn prepare_options_open(host: &Window) -> Result<String, String> {
+    prepare_panel_open(host, ABOUT_W, ABOUT_MIN_W, "options")
+}
+
 fn wait_for_game_edge(app: &AppHandle, label: &str) -> f64 {
     for _ in 0..25 {
         let edge = app.state::<SidebarState>().game_edge(label);
@@ -1011,10 +1050,11 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let collapsed = state.is_collapsed(&label);
     let wiki_open = state.wiki_is_open(&label);
     let about_open = state.about_is_open(&label);
+    let options_open = state.options_is_open(&label);
     let locked = state.is_locked(&label);
     let automatic = state.is_automatic(&label);
     let outside = state.is_wiki_outside(&label);
-    let s = split(host, collapsed, wiki_open, about_open)?;
+    let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
         return Ok("layout: minimized\n".into());
@@ -1024,7 +1064,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let want_w = col + s.wiki_w + s.sidebar_w;
 
     let mut out = format!(
-        "want game={:.0} panel={:.0} bar={:.0} col={col:.0} edge={edge:.0} locked={locked} auto={automatic} outside={outside} hug={want_w:.0} h={:.0} wiki={wiki_open} about={about_open}\n",
+        "want game={:.0} panel={:.0} bar={:.0} col={col:.0} edge={edge:.0} locked={locked} auto={automatic} outside={outside} hug={want_w:.0} h={:.0} wiki={wiki_open} about={about_open} options={options_open}\n",
         s.game_w, s.wiki_w, s.sidebar_w, s.height
     );
 
@@ -1035,12 +1075,12 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
 
     let panel_min = if wiki_open {
         WIKI_MIN_W
-    } else if about_open {
+    } else if about_open || options_open {
         ABOUT_MIN_W
     } else {
         0.0
     };
-    if (wiki_open || about_open) && panel_min > 0.0 && s.wiki_w + 1.0 >= panel_min {
+    if (wiki_open || about_open || options_open) && panel_min > 0.0 && s.wiki_w + 1.0 >= panel_min {
         let scale = host.scale_factor()?;
         let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
         let want = col + s.wiki_w + s.sidebar_w + WIKI_WIDEN_BUFFER;
@@ -1095,7 +1135,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     // rather than destroyed. That is the point of it being its own webview:
     // your page, scroll position and history survive being closed and
     // reopened, and survive the game reloading beside it.
-    let panel_w = if (wiki_open || about_open) && s.wiki_w > 0.0 {
+    let panel_w = if (wiki_open || about_open || options_open) && s.wiki_w > 0.0 {
         s.wiki_w
     } else {
         0.0
@@ -1143,13 +1183,37 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         }
     }
 
+    match options_webview(host) {
+        None => out.push_str("options: not created\n"),
+        Some(options) => {
+            if options_open && panel_w > 0.0 {
+                let p = options.set_position(LogicalPosition::new(panel_x, 0.0));
+                let z = options.set_size(LogicalSize::new(panel_w, s.height));
+                let v = options.show();
+                out.push_str(&format!(
+                    "options pos={} size={} show={} now={}\n",
+                    result_word(&p),
+                    result_word(&z),
+                    result_word(&v),
+                    bounds_word(&options),
+                ));
+            } else {
+                out.push_str(&format!("options hide={}\n", result_word(&options.hide())));
+            }
+            let e = options.eval(format!(
+                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside}}})"
+            ));
+            out.push_str(&format!("options eval={}\n", result_word(&e)));
+        }
+    }
+
     match sidebar_webview(host) {
         None => out.push_str("sidebar webview NOT FOUND\n"),
         Some(bar) => {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},locked:{locked},wikiOutside:{outside}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside}}})"
             ));
             out.push_str(&format!(
                 "bar pos={} size={} eval={} now={}\n",
@@ -1184,8 +1248,9 @@ fn bounds_word(w: &Webview) -> String {
 pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     let label = sidebar_label(window.label());
     let host = window.as_ref().window();
+    crate::app::window::restore_window_geometry(&host);
 
-    let sp = split(&host, false, false, false)?;
+    let sp = split(&host, false, false, false, false)?;
 
     // Served from the bundled assets as tauri://localhost/gbf-sidebar.html, so
     // it is trusted local content with a working IPC bridge. It is deliberately
@@ -1208,6 +1273,9 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     }
     if let Err(error) = create_about(&host, &sp) {
         eprintln!("[Pake][gbf] could not create the about webview: {error}");
+    }
+    if let Err(error) = create_options(&host, &sp) {
+        eprintln!("[Pake][gbf] could not create the options webview: {error}");
     }
 
     // Restore lock before the first layout. Do not call set_lock(false) here:
@@ -1334,6 +1402,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let last_hug = window.app_handle().state::<SidebarState>().last_hug_phys_w(window.label());
     let wiki_open = window.app_handle().state::<SidebarState>().wiki_is_open(window.label());
     let about_open = window.app_handle().state::<SidebarState>().about_is_open(window.label());
+    let options_open = window.app_handle().state::<SidebarState>().options_is_open(window.label());
     let wiki_panel = window.app_handle().state::<SidebarState>().wiki_panel_w(window.label());
     let wiki_outside = window.app_handle().state::<SidebarState>().is_wiki_outside(window.label());
     let persist = crate::app::window::persisted_window_state_path(window.app_handle())
@@ -1345,7 +1414,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let monitor = monitor_inner_ceiling(&window);
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -1457,6 +1526,20 @@ fn create_about(host: &Window, sp: &Split) -> tauri::Result<()> {
         LogicalSize::new(ABOUT_W, sp.height),
     )?;
     if let Some(w) = about_webview(host) {
+        let _ = w.hide();
+    }
+    Ok(())
+}
+
+fn create_options(host: &Window, sp: &Split) -> tauri::Result<()> {
+    let label = options_label(host.label());
+    host.add_child(
+        WebviewBuilder::new(&label, WebviewUrl::App("gbf-options.html".into()))
+            .initialization_script(include_str!("../inject/gbf-keys.js")),
+        LogicalPosition::new(sp.game_w, 0.0),
+        LogicalSize::new(ABOUT_W, sp.height),
+    )?;
+    if let Some(w) = options_webview(host) {
         let _ = w.hide();
     }
     Ok(())
@@ -1667,6 +1750,93 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
         return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| panel_no_room_notice(true)));
     }
     Ok(format!("aboutOpen=true\n{report}"))
+}
+
+/// Open or close the Options page. Same panel path as About (470 / 300).
+#[tauri::command]
+pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    let was_open = app.state::<SidebarState>().options_is_open(&label);
+
+    if was_open {
+        app.state::<SidebarState>().set_options_open(&label, false);
+        app.state::<SidebarState>().restore_collapse_for_panel(&label);
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let handle = app.clone();
+        let win_label = label.clone();
+        app.run_on_main_thread(move || {
+            let report = match handle.get_window(&win_label) {
+                Some(host) => {
+                    restore_panel_width(&host);
+                    let mut out = apply_panel_lock(&host, false);
+                    out.push_str(&layout_verbose(&host));
+                    out
+                }
+                None => format!("get_window({win_label}) -> None"),
+            };
+            let _ = tx.send(report);
+        })
+        .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+        let report = rx
+            .recv_timeout(std::time::Duration::from_secs(8))
+            .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+        return Ok(format!("optionsOpen=false\n{report}"));
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = label.clone();
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            Some(host) => apply_panel_lock(&host, true),
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+    let lock_report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    let _ = wait_for_game_edge(&app, &label);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = label.clone();
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            Some(host) => match prepare_options_open(&host) {
+                Ok(note) => {
+                    handle.state::<SidebarState>().set_options_open(&win_label, true);
+                    let mut out = lock_report.clone();
+                    out.push_str(&note);
+                    out.push_str(&layout_verbose(&host));
+                    out
+                }
+                Err(notice) => {
+                    handle.state::<SidebarState>().restore_collapse_for_panel(&win_label);
+                    let mut out = lock_report.clone();
+                    out.push_str(&apply_panel_lock(&host, false));
+                    out.push_str("REFUSE ");
+                    out.push_str(&notice);
+                    out.push('\n');
+                    out
+                }
+            },
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    let opened = app.state::<SidebarState>().options_is_open(&label);
+    if !opened {
+        return Err(report.lines().find(|l| l.starts_with("REFUSE ")).map(|l| l[7..].to_string()).unwrap_or_else(|| panel_no_room_notice(true)));
+    }
+    Ok(format!("optionsOpen=true\n{report}"))
 }
 
 /// Step the wiki's own history back. It has real history because it is a real

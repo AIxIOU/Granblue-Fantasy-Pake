@@ -20,7 +20,8 @@ use std::{
 };
 use tauri::{
     webview::{DownloadEvent, NewWindowFeatures, NewWindowResponse},
-    AppHandle, Config, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window,
+    AppHandle, Config, Manager, PhysicalPosition, PhysicalSize, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, Window,
 };
 
 #[cfg(target_os = "windows")]
@@ -305,6 +306,29 @@ fn window_state_path(app: &AppHandle) -> Option<PathBuf> {
 /// Path the next launch will restore from. For `gbf_debug`.
 pub fn persisted_window_state_path(app: &AppHandle) -> Option<PathBuf> {
     window_state_path(app)
+}
+
+/// Apply the last saved size and position. The window-state plugin also reads
+/// this file, but a second process or a skip in that plugin still needs the
+/// geometry we wrote after `add_child`.
+pub fn restore_window_geometry(host: &Window) {
+    let Some(path) = window_state_path(host.app_handle()) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(states) = serde_json::from_str::<BTreeMap<String, SavedWindowGeometry>>(&text) else {
+        return;
+    };
+    let Some(saved) = states.get(host.label()) else {
+        return;
+    };
+    if saved.width == 0 || saved.height == 0 {
+        return;
+    }
+    let _ = host.set_size(PhysicalSize::new(saved.width, saved.height));
+    let _ = host.set_position(PhysicalPosition::new(saved.x, saved.y));
 }
 
 /// Write the current OS window size and position so a later launch restores

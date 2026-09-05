@@ -29,6 +29,9 @@ AGENTS.override.md
 # Logs
 AGENT.md
 dist
+!dist/gbf-sidebar.html
+!dist/gbf-about.html
+!dist/gbf-options.html
 dist-ssr
 journal/
 lerna-debug.log*

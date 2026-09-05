@@ -32,8 +32,7 @@ use app::{
     },
     setup::{set_global_shortcut, set_system_tray},
     window::{
-        open_additional_window_safe, reapply_window_icon, reveal_built_window, set_window,
-        MultiWindowState,
+        reapply_window_icon, reveal_built_window, set_window, MultiWindowState,
     },
 };
 use util::get_pake_config;
@@ -234,15 +233,12 @@ pub fn run_app() {
         let instance_revealed = startup_window_revealed.clone();
         app_builder = app_builder.plugin(tauri_plugin_single_instance::init(
             move |app, _args, _cwd| {
-                if multi_window {
-                    open_additional_window_safe(app);
-                } else if let Some(window) = app.get_window("pake") {
-                    cancel_startup_reveal(&instance_revealed);
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    reapply_window_icon(&window);
-                    let _ = window.set_focus();
-                }
+                cancel_startup_reveal(&instance_revealed);
+                // Closing the window hides it (`hide_on_close`). The desktop
+                // shortcut starts this exe again; show the existing window
+                // instead of a new 900×820 clone. Extra windows stay on tray
+                // New Window.
+                app::window::show_all_app_windows(app, init_fullscreen);
             },
         ));
     }
@@ -315,6 +311,7 @@ pub fn run_app() {
             app::sidebar::gbf_toggle_app_windows,
             app::sidebar::gbf_wiki_toggle,
             app::sidebar::gbf_about_toggle,
+            app::sidebar::gbf_options_toggle,
             app::sidebar::gbf_wiki_back,
             app::sidebar::gbf_wiki_home,
             app::sidebar::gbf_toggle_lock,
