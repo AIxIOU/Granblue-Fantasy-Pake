@@ -223,15 +223,14 @@ struct WindowFlags {
     automatic: bool,
     /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
     hug_gen: u64,
-    /// One delayed hug after Size/Full. Further Automatic wrap drops must not
-    /// hug again (recording 124025 walk-down).
-    size_hug_gen: u64,
     /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
     edge_apply_gen: u64,
     /// Layout may hug an Automatic window (set after the settle timer).
     auto_hug_due: bool,
     /// Automatic: one hug per user resize. Stops the walk-down after a snap.
     auto_hug_allowed: bool,
+    /// One leftover hug after Size/Full, cancelled if Size changes again.
+    size_hug_gen: u64,
     /// Physical inner width of the last Automatic hug, to ignore its Resized echo.
     last_hug_phys_w: u32,
     /// Last user width-drag under Automatic lock. Leftover hug waits so GBF
@@ -401,7 +400,18 @@ impl SidebarState {
     }
 
     pub fn set_automatic(&self, label: &str, on: bool) {
-        self.update(label, |f| f.automatic = on);
+        self.update(label, |f| {
+            if f.automatic != on {
+                // Size/Full is not a user width-drag. A leftover hug after
+                // Full is one-shot; this token would cascade to Small.
+                f.auto_hug_allowed = false;
+                f.auto_hug_due = false;
+                if !on {
+                    f.size_hug_gen = f.size_hug_gen.wrapping_add(1);
+                }
+            }
+            f.automatic = on;
+        });
     }
 
     pub fn bump_hug_gen(&self, label: &str) -> u64 {
@@ -415,6 +425,19 @@ impl SidebarState {
 
     pub fn hug_gen(&self, label: &str) -> u64 {
         self.with(label, |f| f.hug_gen)
+    }
+
+    pub fn bump_size_hug_gen(&self, label: &str) -> u64 {
+        let mut out = 0;
+        self.update(label, |f| {
+            f.size_hug_gen = f.size_hug_gen.wrapping_add(1);
+            out = f.size_hug_gen;
+        });
+        out
+    }
+
+    pub fn size_hug_gen(&self, label: &str) -> u64 {
+        self.with(label, |f| f.size_hug_gen)
     }
 
     pub fn bump_edge_apply_gen(&self, label: &str) -> u64 {
@@ -459,10 +482,8 @@ impl SidebarState {
         })
     }
 
-    /// Granblue Size/Full: schedule one leftover hug after wrap settles.
-    /// Returns true when the caller should delay that hug. Fixed Size wrap
-    /// changes hug immediately. Automatic wrapper drops after a hug are GBF
-    /// reflow — hugging those walks down to Small (recording 124025).
+    /// Fixed Size wrap changes hug immediately. Switching to Automatic
+    /// schedules one leftover hug after wrap settles (not grow-room).
     pub fn hug_if_game_size_changed(
         &self,
         label: &str,
@@ -477,28 +498,12 @@ impl SidebarState {
         if self.last_auto_resize_recent(label, std::time::Duration::from_millis(2000)) {
             return false;
         }
-        let auto_flipped = prev_auto != now_auto;
-        let fixed_wrap_changed = !now_auto && prev_edge > 1.0 && (prev_edge - right).abs() > 40.0;
-        if auto_flipped {
-            return true;
-        }
-        if fixed_wrap_changed {
+        if !now_auto && prev_edge > 1.0 && (prev_edge - right).abs() > 40.0 {
             self.set_panel_hug_due(label, true);
+            return false;
         }
-        false
-    }
-
-    pub fn bump_size_hug_gen(&self, label: &str) -> u64 {
-        let mut out = 0;
-        self.update(label, |f| {
-            f.size_hug_gen = f.size_hug_gen.wrapping_add(1);
-            out = f.size_hug_gen;
-        });
-        out
-    }
-
-    pub fn size_hug_gen(&self, label: &str) -> u64 {
-        self.with(label, |f| f.size_hug_gen)
+        // Size → Full: wait for #wrapper to settle, then hug once.
+        prev_auto != now_auto && now_auto
     }
 
     pub fn last_hug_phys_w(&self, label: &str) -> u32 {
@@ -859,8 +864,8 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     Ok(true)
 }
 
-/// First leftover after a user drag is hugged away. Further hugs are skipped
-/// until the next user resize, so GBF reflow cannot walk the window down.
+/// Leftover after a *user* width-drag, once GBF has hit its cap. Size/Full
+/// does not arm this (recording 125222).
 fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
@@ -912,22 +917,43 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
     });
 }
 
-/// One leftover hug after Size/Full, once wrap has settled. Not on every
-/// Automatic reflow — that walks down to Small (recording 124025).
+/// After Size → Full, wait until #wrapper stops moving, then hug leftover
+/// once. Further Automatic reflow must not hug (124025 / 125222).
 fn schedule_size_full_hug(app: AppHandle, label: String) {
     let gen = app.state::<SidebarState>().bump_size_hug_gen(&label);
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(3500));
+        let mut last = -1.0_f64;
+        let mut stable: u32 = 0;
+        for _ in 0..25 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let state = app.state::<SidebarState>();
+            if state.size_hug_gen(&label) != gen {
+                return;
+            }
+            if !state.is_locked(&label) || !state.is_automatic(&label) {
+                return;
+            }
+            let edge = state.game_edge(&label);
+            if edge > 1.0 && (edge - last).abs() < 20.0 {
+                stable += 1;
+            } else {
+                stable = 0;
+            }
+            last = edge;
+            if stable >= 5 {
+                break;
+            }
+        }
         let app_main = app.clone();
         let _ = app.run_on_main_thread(move || {
             let state = app_main.state::<SidebarState>();
             if state.size_hug_gen(&label) != gen {
                 return;
             }
-            if state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000)) {
+            if !state.is_locked(&label) || !state.is_automatic(&label) {
                 return;
             }
-            if !state.is_locked(&label) {
+            if state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000)) {
                 return;
             }
             state.set_panel_hug_due(&label, true);
