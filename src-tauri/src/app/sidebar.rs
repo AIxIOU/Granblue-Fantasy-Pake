@@ -208,6 +208,10 @@ struct WindowFlags {
     panel_before_w: f64,
     /// Inner width we left after growing for the wiki. 0 = none.
     panel_after_w: f64,
+    /// One hug after a panel open/close, even if Automatic already snapped.
+    panel_hug_due: bool,
+    /// User dragged the window while a panel was open; do not restore borrow.
+    panel_user_resized: bool,
 }
 
 /// Per-window flags. `--multi-window` must not share collapsed/wiki/lock
@@ -403,10 +407,39 @@ impl SidebarState {
         (before, after)
     }
 
+    fn take_panel_hug_due(&self, label: &str) -> bool {
+        let mut out = false;
+        self.update(label, |f| {
+            out = f.panel_hug_due;
+            f.panel_hug_due = false;
+        });
+        out
+    }
+
+    fn set_panel_hug_due(&self, label: &str, on: bool) {
+        self.update(label, |f| f.panel_hug_due = on);
+    }
+
+    fn take_panel_user_resized(&self, label: &str) -> bool {
+        let mut out = false;
+        self.update(label, |f| {
+            out = f.panel_user_resized;
+            f.panel_user_resized = false;
+        });
+        out
+    }
+
     /// A user width-drag (not our own hug) may have one Automatic snap.
+    /// A drag while wiki/About is open means we must not restore the borrowed width.
     pub fn arm_auto_hug_if_user_resize(&self, label: &str, phys_w: u32) {
         self.update(label, |f| {
-            if f.hug_busy || !f.locked || !f.automatic {
+            if f.hug_busy {
+                return;
+            }
+            if f.wiki_open || f.about_open {
+                f.panel_user_resized = true;
+            }
+            if !f.locked || !f.automatic {
                 return;
             }
             let last = f.last_hug_phys_w;
@@ -581,12 +614,16 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if state.hug_busy(&label) {
         return Ok(false);
     }
+    let panel_due = state.take_panel_hug_due(&label);
     if state.is_automatic(&label) {
-        if !state.take_auto_hug_due(&label) {
+        let auto_due = state.take_auto_hug_due(&label);
+        if !panel_due && !auto_due {
             return Ok(false);
         }
-        // One snap per user drag. GBF reflow after this must not hug again.
-        state.set_auto_hug_allowed(&label, false);
+        // One snap per user drag. A panel open/close hug does not spend that token.
+        if auto_due && !panel_due {
+            state.set_auto_hug_allowed(&label, false);
+        }
     }
     let scale = host.scale_factor()?;
     let phys = host.inner_size()?;
@@ -753,23 +790,32 @@ fn panel_no_room_notice(automatic: bool) -> String {
     }
 }
 
-/// Grow the OS window to `want` logical inner width. Height is echoed so it
-/// cannot drift. Under Automatic this reloads Granblue — that is GBF's own
+/// Fit the OS window to `want` logical inner width. Height is echoed so it
+/// cannot drift. Grows when a panel needs room; shrinks leftover when a
+/// smaller panel (or a close) no longer needs the wiki's width.
+/// Under Automatic a size change reloads Granblue — that is GBF's own
 /// behaviour; wiki and About still have to take the width they need.
-fn grow_inner_width(host: &Window, want: f64) -> tauri::Result<f64> {
+fn fit_inner_width(host: &Window, want: f64, allow_shrink: bool) -> tauri::Result<f64> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     let scale = host.scale_factor()?;
     let phys = host.inner_size()?;
     let inner_w = phys.to_logical::<f64>(scale).width;
     let ceiling = monitor_inner_ceiling(host);
-    let target = want.min(ceiling).max(inner_w);
+    let target = want.min(ceiling).max(1.0);
     let want_phys = (target * scale).round() as u32;
-    if want_phys <= phys.width {
+    if want_phys == 0 || want_phys == phys.width {
         return Ok(inner_w);
     }
-    state.save_panel_before_w(&label, inner_w);
+    if want_phys > phys.width {
+        state.save_panel_before_w(&label, inner_w);
+    } else if !allow_shrink {
+        return Ok(inner_w);
+    }
     state.set_hug_busy(&label, true);
+    if state.is_automatic(&label) {
+        state.set_last_hug_phys_w(&label, want_phys);
+    }
     host.set_size(PhysicalSize::new(want_phys, phys.height))?;
     let after = host
         .inner_size()
@@ -780,29 +826,76 @@ fn grow_inner_width(host: &Window, want: f64) -> tauri::Result<f64> {
     Ok(after)
 }
 
+fn grow_inner_width(host: &Window, want: f64) -> tauri::Result<f64> {
+    fit_inner_width(host, want, false)
+}
+
+/// After a panel open/close, hug leftover once Granblue has reflowed.
+/// Does not use the Automatic user-drag hug token, so it still runs after
+/// that token is spent — and it does not hug again on later GBF edge updates.
+fn schedule_panel_hug(host: &Window) {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    if !state.is_locked(&label) {
+        return;
+    }
+    let gen = state.bump_hug_gen(&label);
+    let app = host.app_handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let state = app.state::<SidebarState>();
+        if state.hug_gen(&label) != gen || !state.is_locked(&label) {
+            return;
+        }
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = app_main.state::<SidebarState>();
+            if state.hug_gen(&label) != gen {
+                return;
+            }
+            state.set_panel_hug_due(&label, true);
+            if let Some(host) = app_main.get_window(&label) {
+                let _ = layout(&host);
+            }
+        });
+    });
+}
+
 fn restore_panel_width(host: &Window) {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
-    let (before, after) = state.take_panel_restore(&label);
-    if before <= 1.0 {
+    let (before, _after) = state.take_panel_restore(&label);
+    let user_resized = state.take_panel_user_resized(&label);
+    if user_resized {
+        schedule_panel_hug(host);
         return;
     }
-    let Ok(scale) = host.scale_factor() else {
-        return;
-    };
-    let Ok(phys) = host.inner_size() else {
-        return;
-    };
-    let inner_w = phys.to_logical::<f64>(scale).width;
-    if after > 0.0 && (inner_w - after).abs() > 8.0 {
-        return;
+    let automatic = state.is_automatic(&label);
+    // Automatic: do not yank back to the pre-panel size. GBF may have
+    // reflowed larger; restoring a stale width clips the sidebar. Hug leftover
+    // to the current column instead.
+    if !automatic && before > 1.0 {
+        let Ok(scale) = host.scale_factor() else {
+            schedule_panel_hug(host);
+            return;
+        };
+        let Ok(phys) = host.inner_size() else {
+            schedule_panel_hug(host);
+            return;
+        };
+        let want_phys = (before * scale).round() as u32;
+        if want_phys != 0 && want_phys != phys.width {
+            state.set_hug_busy(&label, true);
+            state.set_last_hug_phys_w(&label, want_phys);
+            let _ = host.set_size(PhysicalSize::new(want_phys, phys.height));
+        }
     }
-    let want_phys = (before * scale).round() as u32;
-    if want_phys == 0 || want_phys == phys.width {
-        return;
+    if automatic {
+        state.set_panel_hug_due(&label, true);
+        let _ = layout(host);
+    } else {
+        schedule_panel_hug(host);
     }
-    state.set_hug_busy(&label, true);
-    let _ = host.set_size(PhysicalSize::new(want_phys, phys.height));
 }
 
 /// Pick the preferred width if the monitor can hold it, else the fallback,
@@ -849,7 +942,7 @@ fn prepare_panel_open(
         note.push_str(&format!("Sidebar collapsed to make room for the {name}.\n"));
     }
     let want = needed_for_panel(game_col, chosen, collapsed || need_collapse);
-    let after = grow_inner_width(host, want).map_err(|e| e.to_string())?;
+    let after = fit_inner_width(host, want, true).map_err(|e| e.to_string())?;
     let bar = sidebar_want(collapsed || need_collapse);
     let space = (after - game_col - bar).max(0.0);
     let reserved = if space >= prefer - WIKI_TIER_SLACK {
@@ -870,6 +963,7 @@ fn prepare_panel_open(
         return Err(panel_no_room_notice(automatic));
     }
     state.set_wiki_panel_w(&label, reserved);
+    schedule_panel_hug(host);
     Ok(format!(
         "{note}{name}_tier={reserved:.0} game_col={game_col:.0} ceiling={ceiling:.0} after={after:.0}\n"
     ))
