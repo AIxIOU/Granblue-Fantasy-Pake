@@ -269,7 +269,7 @@ pub fn run_app() {
             // on each load. Cheap, and a no-op when unlocked.
             let label = webview.label();
             if label == "pake" || label.starts_with("pake-") {
-                app::sidebar::reapply_lock(webview);
+                app::sidebar::on_game_page_finished(webview, payload.url());
             }
 
             if label == "pake" {

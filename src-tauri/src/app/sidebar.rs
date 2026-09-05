@@ -733,14 +733,6 @@ fn restore_hug_width(host: &Window) -> String {
     }
 }
 
-/// Locked + Automatic: game fills the window (and never shrinks when the OS
-/// frame hugs). Fixed Window Size overlays the same way.
-fn locked_overlay_game(host: &Window) -> bool {
-    let state = host.app_handle().state::<SidebarState>();
-    let label = host.label();
-    state.is_locked(label) && state.game_edge(label) > 1.0 && !state.is_automatic(label)
-}
-
 /// How much inner width the monitor can actually hold (logical px).
 ///
 /// Uses the work area, minus frame chrome. If the OS reports something smaller
@@ -1064,7 +1056,8 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
 
     let scale = host.scale_factor()?;
     let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
-    let game_w = if locked && automatic {
+    let overlay = locked && edge > 1.0;
+    let game_w = if overlay && automatic {
         // Overlay. Never shrink Granblue's viewport because the OS frame hugged.
         if !state.hug_busy(&label) {
             let last = state.last_hug_phys_w(&label);
@@ -1078,7 +1071,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             }
         }
         state.game_keep_w(&label).max(inner_w).max(1.0)
-    } else if locked_overlay_game(host) {
+    } else if overlay {
         inner_w.max(1.0)
     } else {
         s.game_w
@@ -1721,6 +1714,25 @@ fn hug_js(on: bool) -> String {
     format!("window.__gbfSetHug && window.__gbfSetHug({on})")
 }
 
+/// Push lock CSS into Granblue, or drop the stale lock overlay on Steam login
+/// and other non-game pages so the sidebar cannot sit on top of them.
+pub fn on_game_page_finished(webview: &Webview, url: &Url) {
+    let host_name = url.host_str().unwrap_or("");
+    let on_gbf = host_name.contains("granbluefantasy");
+    if on_gbf {
+        reapply_lock(webview);
+        return;
+    }
+    let label = webview.window().label().to_string();
+    webview
+        .app_handle()
+        .state::<SidebarState>()
+        .set_game_edge(&label, 0.0);
+    if let Some(host) = webview.app_handle().get_window(&label) {
+        let _ = layout(&host);
+    }
+}
+
 /// Push the current lock state into a game webview.
 ///
 /// Called on every page load as well as on toggle, because Granblue rebuilds
@@ -1848,6 +1860,21 @@ pub fn gbf_game_edge(window: Window, right: f64, automatic: bool) -> Result<(), 
     let label = window.label().to_string();
     let state = app.state::<SidebarState>();
     if !state.is_locked(&label) {
+        return Ok(());
+    }
+    if right <= 1.0 {
+        if state.game_edge(&label) <= 1.0 {
+            return Ok(());
+        }
+        state.set_game_edge(&label, 0.0);
+        let handle = app.clone();
+        let win_label = label;
+        app.run_on_main_thread(move || {
+            if let Some(host) = handle.get_window(&win_label) {
+                let _ = layout(&host);
+            }
+        })
+        .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
         return Ok(());
     }
     let same_edge = (state.game_edge(&label) - right).abs() < 0.5;

@@ -14,28 +14,32 @@
       return null;
     }
   }
-  function send(right) {
-    var t = window.__TAURI__;
-    if (!window.__gbfHug || !t || !t.core || !t.core.invoke) return;
-    var auto = automatic();
-    // Wait until GBF's setting exists so we do not hug a Fixed-size window
-    // that is actually Automatic (or the reverse).
-    if (auto === null) return;
-    t.core.invoke("gbf_game_edge", { right: right, automatic: auto });
-  }
 
   window.__gbfReportEdge = function () {
+    var t = window.__TAURI__;
+    if (!t || !t.core || !t.core.invoke) return;
     var el = document.getElementById("wrapper");
-    if (!el) return;
+    if (!el) {
+      // Steam login and other non-game pages. Clear the stale lock edge so
+      // the sidebar cannot sit on top of them.
+      t.core.invoke("gbf_game_edge", { right: 0, automatic: false });
+      return;
+    }
     var r = el.getBoundingClientRect();
-    if (r.width <= 0) return;
-    send(r.right);
+    if (r.width <= 0) {
+      t.core.invoke("gbf_game_edge", { right: 0, automatic: false });
+      return;
+    }
+    if (!window.__gbfHug) return;
+    var auto = automatic();
+    if (auto === null) return;
+    t.core.invoke("gbf_game_edge", { right: r.right, automatic: auto });
   };
 
   window.__gbfSetHug = function (on) {
     window.__gbfHug = !!on;
-    if (!on) return;
     window.__gbfReportEdge();
+    if (!on) return;
     var n = 0;
     var id = setInterval(function () {
       n += 1;
