@@ -115,6 +115,10 @@ struct WindowFlags {
     hug_gen: u64,
     /// Layout may hug an Automatic window (set after the settle timer).
     auto_hug_due: bool,
+    /// Automatic: one hug per user resize. Stops the walk-down after a snap.
+    auto_hug_allowed: bool,
+    /// Physical inner width of the last Automatic hug, to ignore its Resized echo.
+    last_hug_phys_w: u32,
 }
 
 /// Per-window flags. `--multi-window` must not share collapsed/wiki/lock
@@ -235,6 +239,31 @@ impl SidebarState {
             f.auto_hug_due = false;
         });
         out
+    }
+
+    pub fn auto_hug_allowed(&self, label: &str) -> bool {
+        self.with(label, |f| f.auto_hug_allowed)
+    }
+
+    pub fn set_auto_hug_allowed(&self, label: &str, on: bool) {
+        self.update(label, |f| f.auto_hug_allowed = on);
+    }
+
+    pub fn set_last_hug_phys_w(&self, label: &str, w: u32) {
+        self.update(label, |f| f.last_hug_phys_w = w);
+    }
+
+    /// A user width-drag (not our own hug) may have one Automatic snap.
+    pub fn arm_auto_hug_if_user_resize(&self, label: &str, phys_w: u32) {
+        self.update(label, |f| {
+            if f.hug_busy || !f.locked || !f.automatic {
+                return;
+            }
+            let last = f.last_hug_phys_w;
+            if last == 0 || phys_w.abs_diff(last) > 8 {
+                f.auto_hug_allowed = true;
+            }
+        });
     }
 
     pub fn hug_busy(&self, label: &str) -> bool {
@@ -390,14 +419,24 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if state.hug_busy(&label) {
         return Ok(false);
     }
-    if state.is_automatic(&label) && !state.take_auto_hug_due(&label) {
-        return Ok(false);
+    if state.is_automatic(&label) {
+        if !state.take_auto_hug_due(&label) {
+            return Ok(false);
+        }
+        // One snap per user drag. GBF reflow after this must not hug again.
+        state.set_auto_hug_allowed(&label, false);
     }
     let scale = host.scale_factor()?;
     let phys = host.inner_size()?;
     let inner_w = phys.to_logical::<f64>(scale).width;
     let want_w = col + s.wiki_w + s.sidebar_w;
-    if (inner_w - want_w).abs() <= HUG_SLACK {
+    if state.is_automatic(&label) {
+        // Close leftover to the right of the sidebar only. Growing would
+        // fight a shrink, and a second shrink after GBF reflows is the walk-down.
+        if inner_w <= want_w + HUG_SLACK {
+            return Ok(false);
+        }
+    } else if (inner_w - want_w).abs() <= HUG_SLACK {
         return Ok(false);
     }
     let want_phys = (want_w * scale).round() as u32;
@@ -406,20 +445,28 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     }
     state.save_hug_width_once(&label, inner_w);
     state.set_hug_busy(&label, true);
+    if state.is_automatic(&label) {
+        state.set_last_hug_phys_w(&label, want_phys);
+    }
     if let Err(e) = host.set_size(PhysicalSize::new(want_phys, phys.height)) {
         state.set_hug_busy(&label, false);
+        if state.is_automatic(&label) {
+            state.set_auto_hug_allowed(&label, true);
+        }
         return Err(e);
     }
     Ok(true)
 }
 
-/// After a resize under Automatic, wait for GBF to grow into the extra width.
-/// If it cannot (zoom cap), hug the leftover so it does not sit between the
-/// game and the sidebar.
+/// First leftover after a user drag is hugged away. Further hugs are skipped
+/// until the next user resize, so GBF reflow cannot walk the window down.
 fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     if !state.is_locked(&label) || !state.is_automatic(&label) || state.hug_busy(&label) {
+        return;
+    }
+    if !state.auto_hug_allowed(&label) {
         return;
     }
     if state.game_edge(&label) <= 1.0 {
@@ -433,7 +480,7 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
     };
     let inner_w = phys.to_logical::<f64>(scale).width;
     let want_w = col + s.wiki_w + s.sidebar_w;
-    if (inner_w - want_w).abs() <= HUG_SLACK {
+    if inner_w <= want_w + HUG_SLACK {
         return;
     }
     let gen = state.bump_hug_gen(&label);
@@ -726,13 +773,19 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     layout(&host)?;
 
     // The game webview no longer follows the window on its own, so every resize
-    // has to re-run the split.
+    // has to re-run the split. A user width-drag (not our hug) arms one
+    // Automatic snap; GBF reflow after that snap must not arm another.
     let on_resize = host.clone();
     host.on_window_event(move |event| {
         if matches!(
             event,
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
         ) {
+            let state = on_resize.app_handle().state::<SidebarState>();
+            let label = on_resize.label().to_string();
+            if let Ok(phys) = on_resize.inner_size() {
+                state.arm_auto_hug_if_user_resize(&label, phys.width);
+            }
             if let Err(error) = layout(&on_resize) {
                 eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
             }
@@ -1113,6 +1166,14 @@ fn set_lock(host: &Window, on: bool) -> String {
     host.app_handle()
         .state::<SidebarState>()
         .set_locked(host.label(), on);
+    if on {
+        host.app_handle()
+            .state::<SidebarState>()
+            .set_auto_hug_allowed(host.label(), true);
+        host.app_handle()
+            .state::<SidebarState>()
+            .set_last_hug_phys_w(host.label(), 0);
+    }
     let mut extra = String::new();
     if !on {
         let automatic = host
