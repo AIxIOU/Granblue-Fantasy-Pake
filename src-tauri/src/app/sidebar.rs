@@ -124,9 +124,17 @@ const LAYOUT_STATE_FILE: &str = "gbf-layout.json";
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 struct SavedLayout {
     locked: bool,
-    /// Wiki sits to the right of the sidebar. False = between game and sidebar.
-    #[serde(default)]
+    /// Panels sit to the right of the sidebar. False = between game and sidebar.
+    /// Default true. Old persist files stored false because that was the old
+    /// default and the option was hidden on mobile; `placement_chosen` is how
+    /// we tell a real pick from that leftover.
+    #[serde(default = "default_wiki_outside")]
     wiki_outside: bool,
+    /// True once this build has written placement. Missing/false means use
+    /// the new default (right of sidebar), ignoring a leftover wiki_outside
+    /// false.
+    #[serde(default)]
+    placement_chosen: bool,
     /// System tray icon. Process-wide; stored on each window entry.
     /// Default false: no tray, and closing the window quits.
     #[serde(default)]
@@ -145,6 +153,10 @@ struct SavedLayout {
     /// here is simply the webview zoom we render it at.
     #[serde(default)]
     mobile_half: bool,
+}
+
+fn default_wiki_outside() -> bool {
+    true
 }
 
 fn layout_state_path(app: &AppHandle) -> Option<PathBuf> {
@@ -178,6 +190,7 @@ pub fn persist_layout_state(app: &AppHandle) {
             SavedLayout {
                 locked: sidebar.is_locked(label),
                 wiki_outside: sidebar.is_wiki_outside(label),
+                placement_chosen: true,
                 tray: sidebar.is_tray_enabled(),
                 desktop_client: sidebar.is_desktop_client(),
                 mobile_half: sidebar.is_mobile_half(),
@@ -205,10 +218,21 @@ fn restore_layout_locked(app: &AppHandle, label: &str) -> bool {
 }
 
 fn restore_layout_wiki_outside(app: &AppHandle, label: &str) -> bool {
-    load_layout_states(app)
+    let states = load_layout_states(app);
+    states
         .get(label)
-        .map(|s| s.wiki_outside)
-        .unwrap_or(false)
+        .or_else(|| states.values().next())
+        .map(|s| {
+            // Old files stored false because that was the previous default and
+            // the Options control was hidden on mobile. Treat that leftover as
+            // the new default (right of sidebar) until the player picks.
+            if s.placement_chosen {
+                s.wiki_outside
+            } else {
+                true
+            }
+        })
+        .unwrap_or(true)
 }
 
 /// Mobile size. Process-wide, like the client choice.
@@ -248,9 +272,9 @@ struct WindowFlags {
     wiki_open: bool,
     about_open: bool,
     options_open: bool,
-    /// Wiki/About/Options sit to the right of the sidebar (live-client order).
-    /// False = between the game and the sidebar.
-    wiki_outside: bool,
+    /// True = panel between the game and the sidebar. Default false = the
+    /// panel sits to the right of the sidebar so the rail stays flush.
+    wiki_inside: bool,
     locked: bool,
     lock_was_auto: bool,
     /// True when we collapsed the sidebar ourselves to free width for a panel.
@@ -409,11 +433,11 @@ impl SidebarState {
     }
 
     pub fn is_wiki_outside(&self, label: &str) -> bool {
-        self.with(label, |f| f.wiki_outside)
+        self.with(label, |f| !f.wiki_inside)
     }
 
     pub fn set_wiki_outside(&self, label: &str, on: bool) {
-        self.update(label, |f| f.wiki_outside = on);
+        self.update(label, |f| f.wiki_inside = !on);
     }
 
     pub fn set_locked(&self, label: &str, on: bool) {
@@ -686,8 +710,8 @@ fn options_webview(host: &Window) -> Option<Webview> {
 
 /// The window's client area divided between the three webviews.
 ///
-/// Left to right: game | wiki | sidebar. The wiki sits next to the sidebar
-/// rather than next to the game, matching where main's slide-out panel appears.
+/// Widths only. Left-to-right order is decided in `apply_layout`: default is
+/// game | sidebar | panel (flush rail); Options can pick game | panel | sidebar.
 struct Split {
     game_w: f64,
     wiki_w: f64,
@@ -1314,9 +1338,9 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         }
     }
 
-    // The sidebar sits on the game's own column edge. A panel between game
-    // and sidebar (`outside=false`) shifts the bar right; a panel on the
-    // outer edge (`outside=true`) leaves the bar on `col`.
+    // Wiki / About / Options: right of the sidebar (outside) or between the
+    // game and the sidebar. Default is outside so the rail stays flush on
+    // the game.
     let bar_x = if outside {
         col
     } else {
@@ -1472,11 +1496,12 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     if restore_layout_locked(host.app_handle(), host.label()) {
         let _ = set_lock(&host, true);
     }
-    if restore_layout_wiki_outside(host.app_handle(), host.label()) {
-        host.app_handle()
-            .state::<SidebarState>()
-            .set_wiki_outside(host.label(), true);
-    }
+    host.app_handle()
+        .state::<SidebarState>()
+        .set_wiki_outside(
+            host.label(),
+            restore_layout_wiki_outside(host.app_handle(), host.label()),
+        );
 
     layout(&host)?;
     crate::app::window::persist_window_geometry(host.app_handle());
@@ -2306,9 +2331,7 @@ pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
     Ok(format!("locked={now}\n{report}"))
 }
 
-/// Place the wiki/About between the game and the sidebar (`outside=false`) or
-/// on the sidebar's outer right edge (`outside=true`, live-client order).
-/// Mobile size: Default (Granblue's full scale) or Half. No restart needed --
+/// Mobile size: Large (Granblue's full scale) or Small. No restart needed --
 /// it is only a webview zoom plus the usual hug.
 #[tauri::command]
 pub fn gbf_set_mobile_half(window: Window, half: bool) -> Result<String, String> {
@@ -2350,6 +2373,8 @@ pub fn gbf_set_desktop_client(window: Window, desktop: bool) -> Result<String, S
     app.restart();
 }
 
+/// Place Wiki / About / Options to the right of the sidebar (`outside=true`,
+/// default) or between the game and the sidebar (`outside=false`).
 #[tauri::command]
 pub fn gbf_set_wiki_outside(window: Window, outside: bool) -> Result<String, String> {
     let app = window.app_handle().clone();

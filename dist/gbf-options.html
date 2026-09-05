@@ -64,16 +64,16 @@
   Browser Settings still live in the game.</p>
 
   <div id="opt-layout">
-  <h2>Wiki and About placement</h2>
-  <p class="lede">Where the wiki, About, and this page sit relative to the
-  sidebar.</p>
-  <button type="button" class="choice" id="opt-inside">
-    <b>Inside</b>
-    <span>Game, then the panel, then the sidebar.</span>
-  </button>
+  <h2>Wiki, About, and Options placement</h2>
+  <p class="lede">Where those panels sit relative to the sidebar. The sidebar
+  stays against the game either way.</p>
   <button type="button" class="choice" id="opt-outside">
-    <b>Outside</b>
-    <span>Game, then the sidebar, then the panel on the outer edge.</span>
+    <b>Right of sidebar</b>
+    <span>Game, then the sidebar, then the panel. Default.</span>
+  </button>
+  <button type="button" class="choice" id="opt-inside">
+    <b>Between game and sidebar</b>
+    <span>Game, then the panel, then the sidebar.</span>
   </button>
   </div>
 
@@ -137,8 +137,6 @@
       st = st || {};
       trayOn = !!st.tray;
       desktopOn = !!st.desktopClient;
-      var layout = document.getElementById("opt-layout");
-      if (layout) layout.hidden = !!st.mobile;
       paint(!!st.wikiOutside, trayOn, desktopOn);
     }
   };
