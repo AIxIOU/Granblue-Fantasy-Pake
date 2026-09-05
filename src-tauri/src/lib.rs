@@ -264,7 +264,14 @@ pub fn run_app() {
                 return;
             }
 
+            // Granblue rebuilds its document on every navigation and takes
+            // our locked-mode style element with it, so it has to be put back
+            // on each load. Cheap, and a no-op when unlocked.
             let label = webview.label();
+            if label == "pake" || label.starts_with("pake-") {
+                app::sidebar::reapply_lock(webview);
+            }
+
             if label == "pake" {
                 if start_to_tray {
                     return;
@@ -308,6 +315,7 @@ pub fn run_app() {
             app::sidebar::gbf_wiki_toggle,
             app::sidebar::gbf_wiki_back,
             app::sidebar::gbf_wiki_home,
+            app::sidebar::gbf_toggle_lock,
         ])
         .setup(move |app| {
             app.manage(MultiWindowState::new(

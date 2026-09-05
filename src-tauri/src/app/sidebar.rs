@@ -67,6 +67,10 @@ const WIKI_W: f64 = 460.0;
 const WIKI_MIN_W: f64 = 320.0;
 /// The wiki is loaded directly, as a real page in a real webview.
 const WIKI_URL: &str = "https://gbf.wiki/";
+/// Id of the one style element locked mode adds to Granblue's document.
+const LOCK_STYLE_ID: &str = "gbf-native-locked";
+/// Granblue's own chat column. Hiding it is RULE 0 EXCEPTION 2.
+const LOCK_SELECTOR: &str = "#submenu,#general-chat{display:none !important;}";
 
 /// One sidebar per window, so `--multi-window` keeps working: each window gets
 /// its own game webview and its own sidebar beside it.
@@ -83,6 +87,10 @@ pub fn wiki_label(window_label: &str) -> String {
 pub struct SidebarState {
     collapsed: AtomicBool,
     wiki_open: AtomicBool,
+    locked: AtomicBool,
+    /// True when the lock was turned on by opening the wiki rather than by the
+    /// player, so closing the wiki knows whether to undo it.
+    lock_was_auto: AtomicBool,
 }
 
 impl SidebarState {
@@ -101,6 +109,22 @@ impl SidebarState {
 
     pub fn set_wiki_open(&self, open: bool) {
         self.wiki_open.store(open, Ordering::Relaxed);
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked.load(Ordering::Relaxed)
+    }
+
+    pub fn set_locked(&self, on: bool) {
+        self.locked.store(on, Ordering::Relaxed);
+    }
+
+    pub fn lock_was_auto(&self) -> bool {
+        self.lock_was_auto.load(Ordering::Relaxed)
+    }
+
+    pub fn set_lock_was_auto(&self, on: bool) {
+        self.lock_was_auto.store(on, Ordering::Relaxed);
     }
 }
 
@@ -194,6 +218,7 @@ pub fn layout(host: &Window) -> tauri::Result<()> {
     let state = host.app_handle().state::<SidebarState>();
     let collapsed = state.is_collapsed();
     let wiki_open = state.wiki_is_open();
+    let locked = state.is_locked();
     let s = split(host, collapsed, wiki_open)?;
     if s.height <= 0.0 {
         return Ok(()); // minimized; the next Resized event carries real numbers
@@ -224,7 +249,7 @@ pub fn layout(host: &Window) -> tauri::Result<()> {
         // Rust owns both flags; the page only renders them. One source of
         // truth, so the two can never disagree.
         let _ = bar.eval(format!(
-            "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open}}})"
+            "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},locked:{locked}}})"
         ));
     }
     Ok(())
@@ -296,8 +321,9 @@ fn layout_verbose(host: &Window) -> String {
         Some(bar) => {
             let p = bar.set_position(LogicalPosition::new(sp.game_w + sp.wiki_w, 0.0));
             let z = bar.set_size(LogicalSize::new(sp.sidebar_w, sp.height));
+            let locked = host.app_handle().state::<SidebarState>().is_locked();
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},locked:{locked}}})"
             ));
             out.push_str(&format!(
                 "bar pos={} size={} eval={} now={}
@@ -523,6 +549,24 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
             Some(host) => {
                 let mut out = String::new();
                 let open_now = handle.state::<SidebarState>().wiki_is_open();
+
+                // The wiki takes the space locked mode reclaims, exactly as on
+                // main. Without this it takes width from the game instead and
+                // pushes Granblue below what its Window Size needs, clipping
+                // the very column we are hiding.
+                if open_now {
+                    if !handle.state::<SidebarState>().is_locked() {
+                        handle.state::<SidebarState>().set_lock_was_auto(true);
+                        out.push_str(&set_lock(&host, true));
+                        out.push_str("\n");
+                    }
+                } else if handle.state::<SidebarState>().lock_was_auto() {
+                    // Only undo a lock the wiki turned on itself.
+                    handle.state::<SidebarState>().set_lock_was_auto(false);
+                    out.push_str(&set_lock(&host, false));
+                    out.push_str("\n");
+                }
+
                 if open_now {
                     // First open: the webview exists but is still on
                     // about:blank. Navigating is safe from here; creating it
@@ -573,4 +617,61 @@ pub fn gbf_wiki_home(window: Window) -> Result<(), String> {
     let wiki = wiki_webview(&window).ok_or_else(|| "the wiki is not open".to_string())?;
     let url = Url::parse(WIKI_URL).map_err(|e| e.to_string())?;
     wiki.navigate(url).map_err(|e| e.to_string())
+}
+
+/// Locked mode: hide Granblue's chat column so the wiki can use that space.
+///
+/// # Rule 0
+///
+/// This is **exception 2** in `GBF_Pake_RULES_AND_HANDOFF.md`, ported here
+/// unchanged, and it stays inside the same boundary:
+///
+///   - it only ever adds or removes ONE `<style>` element of our own
+///   - it sets `display` and nothing else
+///   - **Granblue's own nodes are never touched, moved or detached**
+///   - it is instantly and completely reversible
+///
+/// It is the only thing in this build that writes to the game's document at
+/// all, and it exists for the same reason it does on `main`: without it the
+/// wiki has to take its width from the game, which pushes Granblue below what
+/// its own Window Size needs and clips this very column.
+fn lock_js(on: bool) -> String {
+    format!(
+        "(function(){{var id={id:?};var el=document.getElementById(id);         if({on}){{if(!el){{el=document.createElement('style');el.id=id;         el.textContent={css:?};(document.head||document.documentElement).appendChild(el);}}}}         else if(el&&el.parentNode){{el.parentNode.removeChild(el);}}}})()",
+        id = LOCK_STYLE_ID,
+        on = on,
+        css = LOCK_SELECTOR,
+    )
+}
+
+/// Push the current lock state into a game webview.
+///
+/// Called on every page load as well as on toggle, because Granblue rebuilds
+/// its document on each navigation and takes our style element with it.
+pub fn reapply_lock(webview: &Webview) {
+    let locked = webview.app_handle().state::<SidebarState>().is_locked();
+    if let Err(error) = webview.eval(lock_js(locked)) {
+        eprintln!("[Pake][gbf] could not reapply locked mode: {error}");
+    }
+}
+
+fn set_lock(host: &Window, on: bool) -> String {
+    host.app_handle().state::<SidebarState>().set_locked(on);
+    match game_webview(host) {
+        Some(game) => format!("lock({on})={}", result_word(&game.eval(lock_js(on)))),
+        None => "lock: game webview NOT FOUND".to_string(),
+    }
+}
+
+/// Toggle locked mode by hand. Returns the new state.
+#[tauri::command]
+pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let now = !app.state::<SidebarState>().is_locked();
+    // A manual toggle takes ownership of the lock away from the wiki, so
+    // closing the wiki will not undo what the player just asked for.
+    app.state::<SidebarState>().set_lock_was_auto(false);
+    let report = set_lock(&window, now);
+    Ok(format!("locked={now}
+{report}"))
 }

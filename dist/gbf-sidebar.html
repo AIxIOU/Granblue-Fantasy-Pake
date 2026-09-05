@@ -109,7 +109,7 @@
 </style>
 
 <div id="top">
-  <button id="toggle" title="Collapse / expand (Alt+L)">&#9776;</button>
+  <button id="toggle" title="Collapse / expand the sidebar">&#9776;</button>
   <span id="brand">Granblue</span>
   <span id="badge">NATIVE</span>
 </div>
@@ -148,6 +148,12 @@
     { label: "Trial Battles", hash: "#trial_battle",             icon: "⚔", key: "[" },
     { label: "Casino",        hash: "#casino",                   icon: "♠", key: "]" },
     { label: "Gacha",         hash: "#gacha",                    icon: "❈", key: ";" },
+
+    { section: "Layout" },
+    // Rule 0 exception 2: hides Granblue's own chat column with CSS display,
+    // nothing detached, instantly reversible. Opening the wiki turns this on
+    // automatically so the panel uses that space instead of the game's.
+    { label: "Lock chat column", cmd: "gbf_toggle_lock", id: "nav-lock", icon: "▤", key: "L" },
 
     { section: "Reference" },
     // Not a Granblue hash. Opens the wiki, which is its own webview pointed
@@ -279,6 +285,8 @@
       if (bar) bar.hidden = !st.wikiOpen;
       var w = document.getElementById("nav-wiki");
       if (w) w.classList.toggle("active", !!st.wikiOpen);
+      var l = document.getElementById("nav-lock");
+      if (l) l.classList.toggle("active", !!st.locked);
     },
     // Kept so an older Rust build still works against this page.
     setCollapsed: function (on) {
@@ -292,7 +300,9 @@
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
     if (e.key === "l" || e.key === "L") {
       e.preventDefault();
-      invoke("gbf_toggle_sidebar").catch(function () {});
+      invoke("gbf_toggle_lock")
+        .then(dump)
+        .catch(function (er) { say(String(er && er.message ? er.message : er)); });
       return;
     }
     if (e.key === "w" || e.key === "W") {
