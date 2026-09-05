@@ -64,12 +64,15 @@ pub fn set_system_tray(
                 show_all_app_windows(app, _init_fullscreen);
             }
             "quit" => {
+                crate::app::window::persist_window_geometry(app);
+                crate::app::sidebar::persist_layout_state(app);
                 let flags = if _init_fullscreen {
                     StateFlags::all()
                 } else {
                     StateFlags::all() & !StateFlags::FULLSCREEN
                 };
                 let _ = app.save_window_state(flags);
+                crate::app::window::persist_window_geometry(app);
                 app.exit(0);
             }
             _ => (),

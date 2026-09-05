@@ -12,9 +12,11 @@ use objc2_web_kit::WKUserContentController;
 #[cfg(target_os = "windows")]
 use std::{os::windows::ffi::OsStrExt, ptr, sync::OnceLock};
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     str::FromStr,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::atomic::{AtomicU32, AtomicU64, Ordering},
+    time::Duration,
 };
 use tauri::{
     webview::{DownloadEvent, NewWindowFeatures, NewWindowResponse},
@@ -272,9 +274,125 @@ pub fn any_app_window_visible(app: &AppHandle) -> bool {
     })
 }
 
+/// Same filename the window-state plugin restores from. We write it ourselves
+/// because after `add_child` that plugin's save looks at `webview_windows()`,
+/// which no longer lists `pake`.
+const WINDOW_STATE_FILE: &str = tauri_plugin_window_state::DEFAULT_FILENAME;
+const PERSIST_DEBOUNCE_MS: u64 = 400;
+static PERSIST_GEN: AtomicU64 = AtomicU64::new(0);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedWindowGeometry {
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    prev_x: i32,
+    prev_y: i32,
+    maximized: bool,
+    visible: bool,
+    decorated: bool,
+    fullscreen: bool,
+}
+
+fn window_state_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(WINDOW_STATE_FILE))
+}
+
+/// Path the next launch will restore from. For `gbf_debug`.
+pub fn persisted_window_state_path(app: &AppHandle) -> Option<PathBuf> {
+    window_state_path(app)
+}
+
+/// Write the current OS window size and position so a later launch restores
+/// them. Uses `windows()` (not `webview_windows()`). Skips minimized windows
+/// so an iconic 0-size frame cannot replace a good save.
+pub fn persist_window_geometry(app: &AppHandle) {
+    let Some(path) = window_state_path(app) else {
+        return;
+    };
+    let mut states: BTreeMap<String, SavedWindowGeometry> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+
+    let mut wrote_any = false;
+    for (label, window) in app.windows() {
+        if window.is_minimized().unwrap_or(false) {
+            continue;
+        }
+        let Ok(size) = window.inner_size() else {
+            continue;
+        };
+        if size.width == 0 || size.height == 0 {
+            continue;
+        }
+        let Ok(pos) = window.outer_position() else {
+            continue;
+        };
+        let maximized = window.is_maximized().unwrap_or(false);
+        let prev = states.get(&label);
+        states.insert(
+            label,
+            SavedWindowGeometry {
+                width: size.width,
+                height: size.height,
+                x: pos.x,
+                y: pos.y,
+                prev_x: if maximized {
+                    prev.map(|p| p.prev_x).unwrap_or(pos.x)
+                } else {
+                    pos.x
+                },
+                prev_y: if maximized {
+                    prev.map(|p| p.prev_y).unwrap_or(pos.y)
+                } else {
+                    pos.y
+                },
+                maximized,
+                visible: true,
+                decorated: window.is_decorated().unwrap_or(true),
+                fullscreen: window.is_fullscreen().unwrap_or(false),
+            },
+        );
+        wrote_any = true;
+    }
+    if !wrote_any {
+        return;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(&states) {
+        if let Err(error) = std::fs::write(&path, bytes) {
+            eprintln!(
+                "[Pake][gbf] failed to save window geometry to {}: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Save after the user stops dragging. Automatic — no Quit required.
+pub fn schedule_persist_window_geometry(app: AppHandle) {
+    let gen = PERSIST_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(PERSIST_DEBOUNCE_MS)).await;
+        if PERSIST_GEN.load(Ordering::Relaxed) != gen {
+            return;
+        }
+        persist_window_geometry(&app);
+    });
+}
+
 /// Hide every webview window (main + multi-window clones). Used by tray Hide
 /// and the activation shortcut so secondary windows are not left on screen.
 pub fn hide_all_app_windows(app: &AppHandle) {
+    persist_window_geometry(app);
+    PERSIST_GEN.fetch_add(1, Ordering::Relaxed);
     for window in app.windows().values() {
         let _ = window.hide();
     }

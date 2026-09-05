@@ -49,6 +49,7 @@
 //! upstream-file patch and must be documented if it ever ships.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
     webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalSize, Url,
@@ -91,6 +92,68 @@ pub fn wiki_label(window_label: &str) -> String {
 
 pub fn about_label(window_label: &str) -> String {
     format!("{window_label}--gbf-about")
+}
+
+/// Separate from `.window-state.json` so extra keys cannot break the plugin's
+/// restore parser. Per-window, same as SidebarState.
+const LAYOUT_STATE_FILE: &str = "gbf-layout.json";
+
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+struct SavedLayout {
+    locked: bool,
+}
+
+fn layout_state_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(LAYOUT_STATE_FILE))
+}
+
+pub fn persisted_layout_state_path(app: &AppHandle) -> Option<PathBuf> {
+    layout_state_path(app)
+}
+
+fn load_layout_states(app: &AppHandle) -> HashMap<String, SavedLayout> {
+    layout_state_path(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Write lock/unlock (and later layout flags) so the next launch matches.
+pub fn persist_layout_state(app: &AppHandle) {
+    let Some(path) = layout_state_path(app) else {
+        return;
+    };
+    let mut states = load_layout_states(app);
+    let sidebar = app.state::<SidebarState>();
+    for label in app.windows().keys() {
+        states.insert(
+            label.clone(),
+            SavedLayout {
+                locked: sidebar.is_locked(label),
+            },
+        );
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(&states) {
+        if let Err(error) = std::fs::write(&path, bytes) {
+            eprintln!(
+                "[Pake][gbf] failed to save layout state to {}: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
+fn restore_layout_locked(app: &AppHandle, label: &str) -> bool {
+    load_layout_states(app)
+        .get(label)
+        .map(|s| s.locked)
+        .unwrap_or(false)
 }
 
 #[derive(Default, Clone, Copy)]
@@ -809,25 +872,42 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
         eprintln!("[Pake][gbf] could not create the about webview: {error}");
     }
 
+    // Restore lock before the first layout. Do not call set_lock(false) here:
+    // unlock would try to restore a hug width and fight the size we just
+    // restored from disk.
+    if restore_layout_locked(host.app_handle(), host.label()) {
+        let _ = set_lock(&host, true);
+    }
+
     layout(&host)?;
+    crate::app::window::persist_window_geometry(host.app_handle());
+    persist_layout_state(host.app_handle());
 
     // The game webview no longer follows the window on its own, so every resize
     // has to re-run the split. A user width-drag (not our hug) arms one
     // Automatic snap; GBF reflow after that snap must not arm another.
     let on_resize = host.clone();
     host.on_window_event(move |event| {
-        if matches!(
-            event,
-            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
-        ) {
-            let state = on_resize.app_handle().state::<SidebarState>();
-            let label = on_resize.label().to_string();
-            if let Ok(phys) = on_resize.inner_size() {
-                state.arm_auto_hug_if_user_resize(&label, phys.width);
+        match event {
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                let state = on_resize.app_handle().state::<SidebarState>();
+                let label = on_resize.label().to_string();
+                if let Ok(phys) = on_resize.inner_size() {
+                    state.arm_auto_hug_if_user_resize(&label, phys.width);
+                }
+                if let Err(error) = layout(&on_resize) {
+                    eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
+                }
+                crate::app::window::schedule_persist_window_geometry(
+                    on_resize.app_handle().clone(),
+                );
             }
-            if let Err(error) = layout(&on_resize) {
-                eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
+            WindowEvent::Moved(_) => {
+                crate::app::window::schedule_persist_window_geometry(
+                    on_resize.app_handle().clone(),
+                );
             }
+            _ => {}
         }
     });
 
@@ -909,9 +989,15 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let hug_allowed = window.app_handle().state::<SidebarState>().auto_hug_allowed(window.label());
     let hug_busy = window.app_handle().state::<SidebarState>().hug_busy(window.label());
     let last_hug = window.app_handle().state::<SidebarState>().last_hug_phys_w(window.label());
+    let persist = crate::app::window::persisted_window_state_path(window.app_handle())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "none".into());
+    let layout_persist = persisted_layout_state_path(window.app_handle())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "none".into());
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -1243,14 +1329,16 @@ fn set_lock(host: &Window, on: bool) -> String {
             extra.push_str(&restore_hug_width(host));
         }
     }
-    match game_webview(host) {
+    let out = match game_webview(host) {
         Some(game) => {
             let lock = result_word(&game.eval(lock_js(on)));
             let hug = result_word(&game.eval(hug_js(on)));
             format!("lock({on})={lock} hug={hug}{extra}")
         }
         None => format!("lock: game webview NOT FOUND{extra}"),
-    }
+    };
+    persist_layout_state(host.app_handle());
+    out
 }
 
 /// Toggle locked mode by hand. Hides the chat column (exception 2) and snaps

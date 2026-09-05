@@ -387,6 +387,10 @@ pub fn run_app() {
                 if hide_on_close && _window.label() == "pake" {
                     // User dismissed the window; do not let startup reveal reopen it.
                     cancel_startup_reveal(&close_revealed);
+                    // Save before hide: CloseRequested never reaches Destroyed, and
+                    // the window-state plugin cannot see this window after add_child.
+                    app::window::persist_window_geometry(_window.app_handle());
+                    app::sidebar::persist_layout_state(_window.app_handle());
                     // Hide window when hide_on_close is enabled (regardless of tray status)
                     let window = _window.clone();
                     tauri::async_runtime::spawn(async move {
@@ -422,6 +426,10 @@ pub fn run_app() {
             std::process::exit(1);
         })
         .run(move |_app, _event| {
+            if let tauri::RunEvent::Exit = _event {
+                app::window::persist_window_geometry(_app);
+                app::sidebar::persist_layout_state(_app);
+            }
             // Handle macOS dock icon click to reopen hidden window
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
