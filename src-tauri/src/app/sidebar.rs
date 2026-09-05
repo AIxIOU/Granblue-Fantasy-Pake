@@ -715,8 +715,11 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     // Prefer the rail we asked for, not the squeezed leftover. After collapse
     // the window is too narrow for 250, so split() reports ~52–59 and a hug
     // to that width is a no-op — expand would never grow back.
+    // Same for an open panel: hug to the reserved width, not whatever
+    // leftover split() carved from the current frame. Collapse-then-expand
+    // at Small was eating Options/About/wiki instead of growing the window.
     let want_bar = sidebar_want(state.is_collapsed(&label));
-    let want_w = col + s.wiki_w + want_bar;
+    let want_w = col + reserved_panel_w(&state, &label, s.wiki_w) + want_bar;
     if state.is_automatic(&label) && !panel_due {
         // Close leftover to the right of the sidebar only. Growing would
         // fight a shrink, and a second shrink after GBF reflows is the walk-down.
@@ -766,7 +769,7 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
         return;
     };
     let inner_w = phys.to_logical::<f64>(scale).width;
-    let want_w = col + s.wiki_w + s.sidebar_w;
+    let want_w = col + reserved_panel_w(&state, &label, s.wiki_w) + sidebar_want(state.is_collapsed(&label));
     if inner_w <= want_w + HUG_SLACK {
         return;
     }
@@ -855,6 +858,19 @@ fn sidebar_want(collapsed: bool) -> f64 {
         SIDEBAR_W_COLLAPSED
     } else {
         SIDEBAR_W
+    }
+}
+
+/// Width the open panel asked for, not the leftover `split()` could steal.
+fn reserved_panel_w(state: &SidebarState, label: &str, split_panel: f64) -> f64 {
+    if !(state.wiki_is_open(label) || state.about_is_open(label) || state.options_is_open(label)) {
+        return 0.0;
+    }
+    let reserved = state.wiki_panel_w(label);
+    if reserved > 1.0 {
+        reserved
+    } else {
+        split_panel
     }
 }
 
@@ -993,7 +1009,7 @@ fn prepare_panel_open(
     let game_col = {
         let edge = state.game_edge(&label);
         if edge > 1.0 {
-            edge
+            css_to_window_logical(host, edge, state.game_dpr(&label))
         } else {
             MIN_GAME_WIDTH
         }
@@ -1151,7 +1167,14 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let scale = host.scale_factor()?;
     let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
     let overlay = locked && edge > 1.0;
-    let game_w = if overlay && automatic {
+    let panel_open = wiki_open || about_open || options_open;
+    // Overlay (no panel): game webview stays full-window so the sidebar can
+    // sit on leftover without shrinking Granblue. A panel is a sibling
+    // column — stretching the game under it lets collapse restack the game
+    // on top of Options/About/wiki (recording 101256).
+    let game_w = if overlay && panel_open {
+        col.max(1.0)
+    } else if overlay && automatic {
         // Overlay. Never shrink Granblue's viewport because the OS frame hugged.
         if !state.hug_busy(&label) {
             let last = state.last_hug_phys_w(&label);
@@ -1269,11 +1292,13 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let e = bar.eval(format!(
                 "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside}}})"
             ));
+            let v = bar.show();
             out.push_str(&format!(
-                "bar pos={} size={} eval={} now={}\n",
+                "bar pos={} size={} eval={} show={} now={}\n",
                 result_word(&p),
                 result_word(&z),
                 result_word(&e),
+                result_word(&v),
                 bounds_word(&bar),
             ));
         }
