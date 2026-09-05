@@ -18,7 +18,23 @@
     return !!(window.__gbfInert && window.__gbfInert());
   }
 
+  // Travel before a press counts as a drag rather than a click.
+  //
+  // 4px on a REAL scroller: the walk found an element whose own overflow-y
+  // scrolls, so a press there is on scrollable content and a small drag is
+  // meant.
+  //
+  // 12px when we fell back to the document. That fallback always succeeds on
+  // a page that scrolls at all, so the drag arms on every element -- battle
+  // buttons and node maps included -- and 4px of wobble on a deliberate tap
+  // would stamp pageDragEndedAt and swallow the click for 250ms. On Granblue's
+  // MOBILE markup there are no inner scrollers at all (measured 2026-09-05:
+  // zero on Home and #quest), so EVERY drag there takes the fallback.
+  //
+  // 12px is above a normal tap's travel and still well inside a deliberate
+  // scroll. It is the one number to tune if taps are ever eaten in combat.
   var DRAG_SCROLL_THRESHOLD = 4;
+  var DRAG_SCROLL_THRESHOLD_FALLBACK = 12;
   var DRAG_CLICK_SUPPRESS_MS = 250;
   var MOMENTUM_MIN_VELOCITY = 0.15;
   var MOMENTUM_FRICTION = 0.95;
@@ -92,12 +108,16 @@
   );
 
   var pageDragTarget = null;
+  var pageDragThreshold = DRAG_SCROLL_THRESHOLD;
   var pageDragging = false;
   var pageDragMoved = false;
   var pageDragEndedAt = 0;
   var pageDragStartY = 0;
   var pageDragStartTop = 0;
 
+  // Returns { el, fallback }. `fallback` says the ancestor walk found nothing
+  // and this is the document scroller -- which is what decides the threshold
+  // above, so the caller has to know which one it got.
   function findScrollableAncestor(el) {
     while (el && el !== document.body && el !== document.documentElement) {
       var cs = window.getComputedStyle(el);
@@ -105,12 +125,14 @@
         (cs.overflowY === "auto" || cs.overflowY === "scroll") &&
         el.scrollHeight > el.clientHeight + 1
       ) {
-        return el;
+        return { el: el, fallback: false };
       }
       el = el.parentElement;
     }
     var scroller = document.scrollingElement || document.documentElement;
-    if (scroller && scroller.scrollHeight > scroller.clientHeight + 1) return scroller;
+    if (scroller && scroller.scrollHeight > scroller.clientHeight + 1) {
+      return { el: scroller, fallback: true };
+    }
     return null;
   }
 
@@ -122,11 +144,15 @@
     "pointerdown",
     function (e) {
       if (e.button !== 0 || inert()) return;
-      var target = findScrollableAncestor(e.target);
-      if (!target) return;
+      var found = findScrollableAncestor(e.target);
+      if (!found) return;
+      var target = found.el;
       pageMomentum.stop();
       pageMomentum.reset();
       pageDragTarget = target;
+      pageDragThreshold = found.fallback
+        ? DRAG_SCROLL_THRESHOLD_FALLBACK
+        : DRAG_SCROLL_THRESHOLD;
       pageDragging = true;
       pageDragMoved = false;
       pageDragStartY = e.clientY;
@@ -141,7 +167,7 @@
     function (e) {
       if (!pageDragging) return;
       var delta = e.clientY - pageDragStartY;
-      if (!pageDragMoved && Math.abs(delta) > DRAG_SCROLL_THRESHOLD) {
+      if (!pageDragMoved && Math.abs(delta) > pageDragThreshold) {
         pageDragMoved = true;
       }
       if (pageDragMoved) {
