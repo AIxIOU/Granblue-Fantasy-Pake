@@ -1,7 +1,7 @@
 use crate::app::config::PakeConfig;
 use std::env;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Config, Manager, WebviewWindow};
+use tauri::{AppHandle, Config, Manager, Webview};
 
 pub fn get_pake_config() -> (PakeConfig, Config) {
     #[cfg(feature = "cli-build")]
@@ -47,9 +47,9 @@ pub fn get_data_dir(app: &AppHandle, package_name: String) -> std::io::Result<Pa
     Ok(data_dir)
 }
 
-pub fn show_toast(window: &WebviewWindow, message: &str) {
+pub fn show_toast(webview: &Webview, message: &str) {
     let script = format!(r#"pakeToast("{message}");"#);
-    if let Err(error) = window.eval(&script) {
+    if let Err(error) = webview.eval(&script) {
         eprintln!("[Pake] Failed to show toast: {error}");
     }
 }

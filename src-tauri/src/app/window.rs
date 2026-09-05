@@ -18,7 +18,7 @@ use std::{
 };
 use tauri::{
     webview::{DownloadEvent, NewWindowFeatures, NewWindowResponse},
-    AppHandle, Config, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Config, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window,
 };
 
 #[cfg(target_os = "windows")]
@@ -149,7 +149,7 @@ fn taskbar_icon_handle() -> Option<isize> {
 // icon cache is ready (#1323). Re-assert both the small/title-bar icon and the
 // large taskbar icon whenever a window becomes visible.
 #[cfg(target_os = "windows")]
-pub fn reapply_window_icon(window: &WebviewWindow) {
+pub fn reapply_window_icon(window: &Window) {
     if let Some(icon) = window.app_handle().default_window_icon().cloned() {
         if let Err(error) = window.set_icon(icon) {
             eprintln!("[Pake] Failed to re-apply the window icon: {error}");
@@ -170,7 +170,7 @@ pub fn reapply_window_icon(window: &WebviewWindow) {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn reapply_window_icon(_window: &WebviewWindow) {}
+pub fn reapply_window_icon(_window: &Window) {}
 
 struct WindowBuildOptions<'a> {
     label: &'a str,
@@ -202,7 +202,7 @@ fn open_requested_window(
 
     let title = target_url.host_str().unwrap_or(target_url.as_str());
     let _ = window.set_title(title);
-    reapply_window_icon(&window);
+    reapply_window_icon(&window.as_ref().window());
     let _ = window.set_focus();
 
     Ok(window)
@@ -221,7 +221,7 @@ pub fn open_additional_window_safe(app: &AppHandle) {
                 let fallback = window.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(3_000)).await;
-                    reveal_built_window(&fallback);
+                    reveal_built_window(&fallback.as_ref().window());
                 });
             }
         });
@@ -233,7 +233,7 @@ pub fn open_additional_window_safe(app: &AppHandle) {
             let fallback = window.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(3_000)).await;
-                reveal_built_window(&fallback);
+                reveal_built_window(&fallback.as_ref().window());
             });
         }
     }
@@ -241,7 +241,7 @@ pub fn open_additional_window_safe(app: &AppHandle) {
 
 /// Show a window that was built hidden once content is ready (or the fallback
 /// timer fires). No-ops when already visible so page-load and fallback can race.
-pub fn reveal_built_window(window: &WebviewWindow) {
+pub fn reveal_built_window(window: &Window) {
     if window.is_visible().unwrap_or(true) {
         return;
     }
@@ -257,7 +257,9 @@ pub fn reveal_built_window(window: &WebviewWindow) {
 /// minimized as visible makes the tray toggle hide an already-invisible window
 /// instead of restoring it (#1343).
 pub fn any_app_window_visible(app: &AppHandle) -> bool {
-    app.webview_windows().values().any(|window| {
+    // `webview_windows()` is empty once a window has child webviews
+    // (`add_child` makes it stop being a WebviewWindow). Enumerate `windows()`.
+    app.windows().values().any(|window| {
         window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
     })
 }
@@ -265,14 +267,14 @@ pub fn any_app_window_visible(app: &AppHandle) -> bool {
 /// Hide every webview window (main + multi-window clones). Used by tray Hide
 /// and the activation shortcut so secondary windows are not left on screen.
 pub fn hide_all_app_windows(app: &AppHandle) {
-    for window in app.webview_windows().values() {
+    for window in app.windows().values() {
         let _ = window.hide();
     }
 }
 
 /// Show every webview window, reassert icons, and focus the main window.
 pub fn show_all_app_windows(app: &AppHandle, init_fullscreen: bool) {
-    let windows = app.webview_windows();
+    let windows = app.windows();
     for window in windows.values() {
         let _ = window.unminimize();
         let _ = window.show();
@@ -689,17 +691,15 @@ fn build_window(
             } => {
                 // Toast on the window that started the download (including
                 // secondary multi-window labels), not a hard-coded "pake".
-                let toast_window = download_handle
-                    .get_webview_window(webview.label())
-                    .or_else(|| download_handle.get_webview_window("pake"));
-                if let Some(window) = toast_window {
-                    let message_type = if success {
-                        MessageType::Success
-                    } else {
-                        MessageType::Failure
-                    };
-                    show_toast(&window, &get_download_message_with_lang(message_type, None));
-                }
+                // Do not look the invoker up as a WebviewWindow: after add_child
+                // that type no longer exists. The download handler already has
+                // the originating webview.
+                let message_type = if success {
+                    MessageType::Success
+                } else {
+                    MessageType::Failure
+                };
+                show_toast(&webview, &get_download_message_with_lang(message_type, None));
                 true
             }
             _ => true,

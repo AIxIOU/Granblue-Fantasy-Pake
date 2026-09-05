@@ -62,7 +62,7 @@ fn apply_badge_label(app: &AppHandle, label: Option<&str>) -> Result<(), String>
 #[cfg(not(target_os = "macos"))]
 fn apply_badge_label(app: &AppHandle, label: Option<&str>) -> Result<(), String> {
     let window = app
-        .get_webview_window("pake")
+        .get_window("pake")
         .ok_or("Main window not found")?;
     let count = label.and_then(|s| s.parse::<i64>().ok());
     window
@@ -109,7 +109,7 @@ pub async fn download_file(
     // Toast on the calling window (secondary windows included), not a hard-coded
     // main-window label. Tauri injects the invoker as `window`.
     show_toast(
-        &window,
+        window.as_ref(),
         &get_download_message_with_lang(MessageType::Start, params.language.clone()),
     );
 
@@ -143,7 +143,7 @@ pub async fn download_file(
             // must not be written as files or toasted as successful downloads.
             if !res.status().is_success() {
                 show_toast(
-                    &window,
+                    window.as_ref(),
                     &get_download_message_with_lang(MessageType::Failure, params.language),
                 );
                 return Err(format!("Download failed with HTTP status {}", res.status()));
@@ -162,14 +162,14 @@ pub async fn download_file(
             }
 
             show_toast(
-                &window,
+                window.as_ref(),
                 &get_download_message_with_lang(MessageType::Success, params.language.clone()),
             );
             Ok(())
         }
         Err(e) => {
             show_toast(
-                &window,
+                window.as_ref(),
                 &get_download_message_with_lang(MessageType::Failure, params.language),
             );
             Err(e.to_string())
@@ -225,7 +225,7 @@ pub async fn update_theme_mode(app: AppHandle, mode: String) {
     } else {
         Theme::Light
     };
-    for window in app.webview_windows().values() {
+    for window in app.windows().values() {
         let _ = window.set_theme(Some(theme));
     }
 }
@@ -249,15 +249,15 @@ pub fn set_zoom(window: WebviewWindow, percent: f64) -> Result<(), String> {
 pub fn webview_navigate(window: WebviewWindow, action: String) -> Result<(), String> {
     match action.as_str() {
         "reload" => {
-            reload_window(&window);
+            reload_window(window.as_ref());
             Ok(())
         }
         "back" => {
-            history_step(&window, true);
+            history_step(window.as_ref(), true);
             Ok(())
         }
         "forward" => {
-            history_step(&window, false);
+            history_step(window.as_ref(), false);
             Ok(())
         }
         other => Err(format!(

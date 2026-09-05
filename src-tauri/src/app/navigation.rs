@@ -2,17 +2,17 @@
 //! Blank error shells have no JS context, so `eval("history.back()")` and
 //! `location.reload()` are dead exactly when the user is stuck.
 
-use tauri::WebviewWindow;
+use tauri::Webview;
 
 /// Reload the current document via the native webview API.
-pub fn reload_window(window: &WebviewWindow) {
+pub fn reload_window(window: &Webview) {
     if let Err(error) = window.reload() {
         eprintln!("[Pake] Failed to reload webview: {error}");
     }
 }
 
 /// Step the webview history without requiring a live page JS context.
-pub fn history_step(window: &WebviewWindow, back: bool) {
+pub fn history_step(window: &Webview, back: bool) {
     let stepped = window.with_webview(move |webview| {
         history_step_platform(&webview, back);
     });

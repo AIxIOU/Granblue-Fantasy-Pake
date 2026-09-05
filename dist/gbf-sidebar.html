@@ -185,8 +185,8 @@
     var d = document.getElementById("dbg");
     if (!d) return;
     d.textContent = String(text);
-    // Click the footer to show it; it covers the nav otherwise.
-    d.className = "";
+    // Show it. The footer click still toggles `.on` if it is in the way.
+    d.className = "on";
   }
 
   function refreshDebug() {
@@ -200,6 +200,7 @@
     if (!t) { say("NO __TAURI__ global"); return; }
     if (!t.core || !t.core.invoke) { say("__TAURI__: " + Object.keys(t).join(",")); return; }
     say("ipc ready — click here for diagnostics");
+    window.refreshDebug = refreshDebug;
     refreshDebug();
     var f = document.getElementById("foot");
     if (f) {

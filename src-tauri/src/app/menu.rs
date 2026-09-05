@@ -4,7 +4,7 @@ use crate::app::window::{open_additional_window_safe, MultiWindowState};
 use std::io::Write;
 use std::process::{Command, Stdio};
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, WebviewWindow, Wry};
+use tauri::{AppHandle, Manager, Webview, Window, Wry};
 use tauri_plugin_opener::OpenerExt;
 
 pub fn set_app_menu(
@@ -248,13 +248,17 @@ fn home_url(app: &AppHandle) -> Option<tauri::Url> {
     resolve_home_url(&window_config.url_type, &window_config.url)
 }
 
-fn focused_webview_window(app_handle: &AppHandle) -> Option<WebviewWindow> {
-    let windows = app_handle.webview_windows();
-    windows
-        .values()
-        .find(|window| window.is_focused().unwrap_or(false))
-        .cloned()
-        .or_else(|| windows.get("pake").cloned())
+fn focused_window(app_handle: &AppHandle) -> Option<Window> {
+    app_handle
+        .get_focused_window()
+        .or_else(|| app_handle.get_window("pake"))
+}
+
+fn focused_game_webview(app_handle: &AppHandle) -> Option<Webview> {
+    let label = focused_window(app_handle)?.label().to_string();
+    app_handle
+        .get_webview(&label)
+        .or_else(|| app_handle.get_webview("pake"))
 }
 
 /// Copy text via pbcopy so it works when the page has no JS context (error
@@ -280,14 +284,14 @@ pub fn handle_menu_click(app_handle: &AppHandle, id: &str) {
                 .open_url("https://github.com/tw93/Pake", None::<&str>);
         }
         "reload" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 // Native reload works on blank error pages where eval cannot.
                 reload_window(&window);
             }
         }
         "toggle_devtools" => {
             #[cfg(debug_assertions)] // Only allow in debug builds
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 if window.is_devtools_open() {
                     window.close_devtools();
                 } else {
@@ -296,32 +300,32 @@ pub fn handle_menu_click(app_handle: &AppHandle, id: &str) {
             }
         }
         "zoom_in" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 let _ = window.eval("zoomIn()");
             }
         }
         "zoom_out" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 let _ = window.eval("zoomOut()");
             }
         }
         "zoom_reset" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 let _ = window.eval("setZoom('100%')");
             }
         }
         "go_back" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 history_step(&window, true);
             }
         }
         "go_forward" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 history_step(&window, false);
             }
         }
         "go_home" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 // Native navigation works even from a blank error page (where
                 // eval cannot run) and resolves local-file apps to the correct
                 // bundled asset instead of a path on the current origin.
@@ -336,7 +340,7 @@ pub fn handle_menu_click(app_handle: &AppHandle, id: &str) {
             }
         }
         "copy_url" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 // Prefer the native webview URL so copy still works on error
                 // pages that have no document.location / clipboard API.
                 if let Ok(url) = window.url() {
@@ -345,34 +349,34 @@ pub fn handle_menu_click(app_handle: &AppHandle, id: &str) {
             }
         }
         "paste_and_match_style" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 let _ = window.eval("triggerPasteAsPlainText()");
             }
         }
         "find" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 let _ = window.eval("window.pakeFind?.open()");
             }
         }
         "find_next" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 let _ = window.eval("window.pakeFind?.next()");
             }
         }
         "find_previous" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 let _ = window.eval("window.pakeFind?.previous()");
             }
         }
         "clear_cache_restart" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_game_webview(app_handle) {
                 if window.clear_all_browsing_data().is_ok() {
                     app_handle.restart();
                 }
             }
         }
         "always_on_top" => {
-            if let Some(window) = focused_webview_window(app_handle) {
+            if let Some(window) = focused_window(app_handle) {
                 let is_on_top = window.is_always_on_top().unwrap_or(false);
                 let _ = window.set_always_on_top(!is_on_top);
             }

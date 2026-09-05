@@ -40,17 +40,18 @@
 //! nothing moved and it read like a broken IPC call. Everything here works on
 //! `Window` and its `webviews()` list instead.
 //!
-//! **This breaks Pake's own code too**, which is a real cost of the approach
+//! **This also broke Pake's own code**, which is a real cost of the approach
 //! rather than a detail of this module: `hide_all_app_windows`,
-//! `show_all_app_windows` and `any_app_window_visible` in `window.rs` all
-//! enumerate `app.webview_windows()`, which is now empty. Tray Hide/Show and the
-//! activation shortcut are therefore expected to be dead in this build. They
-//! would need porting to `app.windows()` before any of this could ship.
+//! `show_all_app_windows` and `any_app_window_visible` used to enumerate
+//! `app.webview_windows()`. They, plus the matching `get_webview_window`
+//! lookups, were ported to `app.windows()` / `get_window` in this experiment
+//! so tray Hide/Show and the activation shortcut can work. That port is an
+//! upstream-file patch and must be documented if it ever ships.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
-    webview::WebviewBuilder, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
-    WebviewWindow, Window, WindowEvent,
+    webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview,
+    WebviewUrl, WebviewWindow, Window, WindowEvent,
 };
 
 /// Expanded width, matching `SIDEBAR_W` in gbf-scaler.js so the two builds are
@@ -468,7 +469,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let logical = phys.to_logical::<f64>(if scale > 0.0 { scale } else { 1.0 });
     let collapsed = window.app_handle().state::<SidebarState>().is_collapsed();
 
-    Ok(format!(
+    let report = format!(
         "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}",
         window.label(),
         sidebar_label(window.label()),
@@ -477,6 +478,27 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         phys.height,
         logical.width,
         logical.height,
+    );
+    // The sidebar webview is not a CDP target, and synthetic clicks often miss
+    // its footer, so the same snapshot is also written where a later session
+    // can read it without the overlay.
+    let dump_path = std::env::temp_dir().join("gbf-native-sidebar-debug.txt");
+    let _ = std::fs::write(&dump_path, &report);
+    eprintln!("[Pake][gbf] gbf_debug written to {}", dump_path.display());
+    Ok(report)
+}
+
+/// Drive the same Hide/Show path the tray uses, so it can be verified without
+/// finding the tray icon. Experiment diagnostic only.
+#[tauri::command]
+pub fn gbf_toggle_app_windows(app: AppHandle) -> Result<String, String> {
+    let before = crate::app::window::any_app_window_visible(&app);
+    crate::app::window::toggle_all_app_windows(&app, false);
+    let after = crate::app::window::any_app_window_visible(&app);
+    let mut labels: Vec<String> = app.windows().keys().cloned().collect();
+    labels.sort();
+    Ok(format!(
+        "any_visible {before} -> {after}; windows()={labels:?}"
     ))
 }
 

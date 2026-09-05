@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tauri::{webview::PageLoadEvent, Manager, Url, WebviewWindow};
+use tauri::{webview::PageLoadEvent, Manager, Url, Window};
 use tauri_plugin_window_state::Builder as WindowStatePlugin;
 use tauri_plugin_window_state::StateFlags;
 
@@ -57,7 +57,7 @@ pub(crate) fn cancel_startup_reveal(revealed: &AtomicBool) {
     revealed.store(true, Ordering::Release);
 }
 
-fn reveal_startup_window(window: WebviewWindow, init_fullscreen: bool, revealed: &Arc<AtomicBool>) {
+fn reveal_startup_window(window: Window, init_fullscreen: bool, revealed: &Arc<AtomicBool>) {
     if !claim_startup_reveal(revealed) {
         return;
     }
@@ -236,7 +236,7 @@ pub fn run_app() {
             move |app, _args, _cwd| {
                 if multi_window {
                     open_additional_window_safe(app);
-                } else if let Some(window) = app.get_webview_window("pake") {
+                } else if let Some(window) = app.get_window("pake") {
                     cancel_startup_reveal(&instance_revealed);
                     let _ = window.unminimize();
                     let _ = window.show();
@@ -276,7 +276,7 @@ pub fn run_app() {
                 if start_to_tray {
                     return;
                 }
-                if let Some(window) = webview.app_handle().get_webview_window("pake") {
+                if let Some(window) = webview.app_handle().get_window("pake") {
                     reveal_startup_window(window, init_fullscreen, &page_load_revealed);
                 }
                 return;
@@ -285,7 +285,7 @@ pub fn run_app() {
             // Multi-window clones (pake-1, pake-2, …) built hidden by
             // open_additional_window_safe.
             if label.starts_with("pake-") {
-                if let Some(window) = webview.app_handle().get_webview_window(label) {
+                if let Some(window) = webview.app_handle().get_window(label) {
                     reveal_built_window(&window);
                 }
             }
@@ -312,6 +312,7 @@ pub fn run_app() {
             app::sidebar::gbf_nav,
             app::sidebar::gbf_toggle_sidebar,
             app::sidebar::gbf_debug,
+            app::sidebar::gbf_toggle_app_windows,
             app::sidebar::gbf_wiki_toggle,
             app::sidebar::gbf_wiki_back,
             app::sidebar::gbf_wiki_home,
@@ -369,7 +370,7 @@ pub fn run_app() {
                         STARTUP_WINDOW_FALLBACK_DELAY,
                     ))
                     .await;
-                    reveal_startup_window(window_clone, init_fullscreen, &startup_window_revealed);
+                    reveal_startup_window(window_clone.as_ref().window(), init_fullscreen, &startup_window_revealed);
                 });
             } else {
                 // Tray/shortcut already hold clones that cancel user-driven toggles.
@@ -426,7 +427,7 @@ pub fn run_app() {
             } = _event
             {
                 if !has_visible_windows {
-                    if let Some(window) = _app.get_webview_window("pake") {
+                    if let Some(window) = _app.get_window("pake") {
                         cancel_startup_reveal(&reopen_revealed);
                         let _ = window.show();
                         reapply_window_icon(&window);
