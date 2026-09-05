@@ -75,6 +75,20 @@
     <span>Game, then the sidebar, then the panel on the outer edge.</span>
   </button>
 
+  <h2>Granblue client</h2>
+  <button type="button" class="choice" id="opt-mobile">
+    <b>Mobile (recommended)</b>
+    <span>Granblue's phone client. It has no chat column and never reloads when
+    you resize the window, so the game keeps up with the frame. The app
+    restarts to switch.</span>
+  </button>
+  <button type="button" class="choice" id="opt-desktop">
+    <b>Desktop</b>
+    <span>Granblue's PC client, with its Window Size settings. On Automatic
+    Resizing it reloads on every resize, so the sidebar is hidden there and the
+    window is left entirely to the game. The app restarts to switch.</span>
+  </button>
+
   <h2>Desktop</h2>
   <button type="button" class="choice" id="opt-tray">
     <b>System tray</b>
@@ -88,26 +102,40 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside, tray) {
+  function paint(outside, tray, desktopClient) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
     document.getElementById("opt-tray").classList.toggle("on", !!tray);
+    document.getElementById("opt-mobile").classList.toggle("on", !desktopClient);
+    document.getElementById("opt-desktop").classList.toggle("on", !!desktopClient);
   }
   var trayOn = false;
+  var desktopOn = false;
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn); });
   });
   document.getElementById("opt-tray").addEventListener("click", function () {
     invoke("gbf_set_tray", { on: !trayOn });
+  });
+  // Switching client restarts the app: a webview's user agent can only be set
+  // when it is built.
+  document.getElementById("opt-mobile").addEventListener("click", function () {
+    if (!desktopOn) return;
+    invoke("gbf_set_desktop_client", { desktop: false });
+  });
+  document.getElementById("opt-desktop").addEventListener("click", function () {
+    if (desktopOn) return;
+    invoke("gbf_set_desktop_client", { desktop: true });
   });
   window.__gbfOptions = {
     setState: function (st) {
       st = st || {};
       trayOn = !!st.tray;
-      paint(!!st.wikiOutside, trayOn);
+      desktopOn = !!st.desktopClient;
+      paint(!!st.wikiOutside, trayOn, desktopOn);
     }
   };
 </script>

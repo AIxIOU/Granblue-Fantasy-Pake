@@ -62,6 +62,13 @@ use tauri::{
 pub const SIDEBAR_W: f64 = 250.0;
 /// Collapsed rail width, matching `SIDEBAR_W_COLLAPSED` in gbf-scaler.js.
 pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
+/// Granblue serves an entirely different, lighter client on this user agent.
+/// It has no `#submenu` chat column, lays out at a fixed 320 CSS px, and never
+/// re-fits or reloads when the viewport changes -- see
+/// `GBF_Pake_MOBILE_CLIENT_NOTES.md`. This is the default client.
+pub const MOBILE_USER_AGENT: &str =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1";
+
 /// Shown when a panel is asked for while Granblue is on Automatic Resizing.
 /// Wiki/About/Options tile the game, and tiling needs a window we are allowed
 /// to size -- which under Automatic we are not.
@@ -125,6 +132,15 @@ struct SavedLayout {
     /// Default false: no tray, and closing the window quits.
     #[serde(default)]
     tray: bool,
+    /// Ask Granblue for its DESKTOP client. Default false = mobile.
+    ///
+    /// The mobile client is a fixed 320 CSS layout that never re-fits and never
+    /// reloads on a resize; the desktop client reloads on every width change
+    /// under Automatic Resizing. Mobile is the default for that reason.
+    /// Process-wide, like `tray`, because the user agent can only be set when
+    /// the webview is built.
+    #[serde(default)]
+    desktop_client: bool,
 }
 
 fn layout_state_path(app: &AppHandle) -> Option<PathBuf> {
@@ -159,6 +175,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 locked: sidebar.is_locked(label),
                 wiki_outside: sidebar.is_wiki_outside(label),
                 tray: sidebar.is_tray_enabled(),
+                desktop_client: sidebar.is_desktop_client(),
             },
         );
     }
@@ -186,6 +203,17 @@ fn restore_layout_wiki_outside(app: &AppHandle, label: &str) -> bool {
     load_layout_states(app)
         .get(label)
         .map(|s| s.wiki_outside)
+        .unwrap_or(false)
+}
+
+/// Which Granblue client to request. Process-wide, like the tray flag.
+/// Default false = mobile, which is the one that does not reload on resize.
+pub fn restore_layout_desktop_client(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.desktop_client)
+        .or_else(|| states.values().next().map(|s| s.desktop_client))
         .unwrap_or(false)
 }
 
@@ -265,6 +293,8 @@ pub struct SidebarState {
     by_window: Mutex<HashMap<String, WindowFlags>>,
     /// Process-wide. Not per `--multi-window` clone.
     tray: AtomicBool,
+    /// Process-wide. Which Granblue client to ask for. False = mobile.
+    desktop_client: AtomicBool,
 }
 
 impl SidebarState {
@@ -284,6 +314,14 @@ impl SidebarState {
 
     pub fn set_tray_enabled(&self, on: bool) {
         self.tray.store(on, Ordering::Relaxed);
+    }
+
+    pub fn is_desktop_client(&self) -> bool {
+        self.desktop_client.load(Ordering::Relaxed)
+    }
+
+    pub fn set_desktop_client(&self, on: bool) {
+        self.desktop_client.store(on, Ordering::Relaxed);
     }
 
     pub fn is_collapsed(&self, label: &str) -> bool {
@@ -1223,11 +1261,46 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let automatic = state.is_automatic(&label);
     let outside = state.is_wiki_outside(&label);
     let tray = state.is_tray_enabled();
+    let desktop_client = state.is_desktop_client();
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
         return Ok("layout: minimized\n".into());
     }
+    // DESKTOP client + Automatic Resizing: hand the whole window to Granblue
+    // and get out of the way. No sidebar, no panels, no hugs, no zoom.
+    //
+    // This is the mode every hug, settle timer and walk-down in this file was
+    // written for, and none of them worked: the desktop client re-fits to its
+    // viewport and reloads on every width change, so anything we place beside
+    // it either strands a dead strip or fights the player's drag. The sidebar
+    // is available on the fixed Sizes, and on the mobile client, which does not
+    // re-fit at all. See GBF_Pake_HANDOFF_2026-09-05af.md.
+    if automatic && !state.is_mobile(&label) {
+        if let Some(bar) = sidebar_webview(host) {
+            let _ = bar.hide();
+        }
+        for panel in [wiki_webview(host), about_webview(host), options_webview(host)] {
+            if let Some(p) = panel {
+                let _ = p.hide();
+            }
+        }
+        state.close_panels_for_automatic(&label);
+        if let Some(game) = game_webview(host) {
+            let full = host
+                .scale_factor()
+                .ok()
+                .and_then(|sc| host.inner_size().ok().map(|p| p.to_logical::<f64>(sc).width))
+                .unwrap_or(s.game_w);
+            let _ = game.set_position(LogicalPosition::new(0.0, 0.0));
+            let _ = game.set_size(LogicalSize::new(full.max(1.0), s.height));
+        }
+        state.set_hug_busy(&label, false);
+        return Ok(format!(
+            "layout: desktop client on Automatic -- bare window, sidebar hidden\n"
+        ));
+    }
+
     let col = column_x(host, &s);
     let edge = state.game_edge(&label);
     let want_w = col + s.wiki_w + s.sidebar_w;
@@ -1423,7 +1496,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                 out.push_str(&format!("options hide={}\n", result_word(&options.hide())));
             }
             let e = options.eval(format!(
-                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray}}})"
+                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client}}})"
             ));
             out.push_str(&format!("options eval={}\n", result_word(&e)));
         }
@@ -2335,6 +2408,22 @@ pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
 
 /// Place the wiki/About between the game and the sidebar (`outside=false`) or
 /// on the sidebar's outer right edge (`outside=true`, live-client order).
+/// Choose which Granblue client to request. Mobile is the default.
+///
+/// The user agent can only be set when a webview is built, so this persists the
+/// choice and restarts the app. `restart()` does not return.
+#[tauri::command]
+pub fn gbf_set_desktop_client(window: Window, desktop: bool) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let state = app.state::<SidebarState>();
+    if state.is_desktop_client() == desktop {
+        return Ok(format!("desktop_client already {desktop}"));
+    }
+    state.set_desktop_client(desktop);
+    persist_layout_state(&app);
+    app.restart();
+}
+
 #[tauri::command]
 pub fn gbf_set_wiki_outside(window: Window, outside: bool) -> Result<String, String> {
     let app = window.app_handle().clone();

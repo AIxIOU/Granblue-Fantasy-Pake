@@ -556,7 +556,16 @@ fn build_window(
         url
     };
 
-    let user_agent = config.user_agent.get();
+    // Which Granblue client to ask for. Default is MOBILE: it is a fixed 320
+    // CSS layout that never re-fits and never reloads on a width change, where
+    // the desktop client reloads on every resize under Automatic Resizing.
+    // The user agent can only be set when the webview is built, so switching
+    // this restarts the app (see `gbf_set_desktop_client`).
+    let user_agent = if crate::app::sidebar::restore_layout_desktop_client(app) {
+        config.user_agent.get().clone()
+    } else {
+        crate::app::sidebar::MOBILE_USER_AGENT.to_string()
+    };
 
     let config_script = format!(
         "window.pakeConfig = {}",
@@ -575,7 +584,7 @@ fn build_window(
     let mut window_builder = WebviewWindowBuilder::new(app, label, url)
         .title(effective_title)
         .visible(visible)
-        .user_agent(user_agent)
+        .user_agent(&user_agent)
         .resizable(window_config.resizable)
         .maximized(window_config.maximize);
 
