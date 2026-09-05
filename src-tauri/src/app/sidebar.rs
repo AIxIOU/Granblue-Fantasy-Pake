@@ -109,10 +109,12 @@ struct WindowFlags {
     hug_saved_w: f64,
     /// True between our set_size and the Resized layout that follows it.
     hug_busy: bool,
-    /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`). When locked in
-    /// that mode the window stays user-resizable: the game fills the tiled
-    /// column, so both edges stay flush without hugging.
+    /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`).
     automatic: bool,
+    /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
+    hug_gen: u64,
+    /// Layout may hug an Automatic window (set after the settle timer).
+    auto_hug_due: bool,
 }
 
 /// Per-window flags. `--multi-window` must not share collapsed/wiki/lock
@@ -207,6 +209,32 @@ impl SidebarState {
 
     pub fn set_automatic(&self, label: &str, on: bool) {
         self.update(label, |f| f.automatic = on);
+    }
+
+    pub fn bump_hug_gen(&self, label: &str) -> u64 {
+        let mut out = 0;
+        self.update(label, |f| {
+            f.hug_gen = f.hug_gen.wrapping_add(1);
+            out = f.hug_gen;
+        });
+        out
+    }
+
+    pub fn hug_gen(&self, label: &str) -> u64 {
+        self.with(label, |f| f.hug_gen)
+    }
+
+    pub fn set_auto_hug_due(&self, label: &str, on: bool) {
+        self.update(label, |f| f.auto_hug_due = on);
+    }
+
+    pub fn take_auto_hug_due(&self, label: &str) -> bool {
+        let mut out = false;
+        self.update(label, |f| {
+            out = f.auto_hug_due;
+            f.auto_hug_due = false;
+        });
+        out
     }
 
     pub fn hug_busy(&self, label: &str) -> bool {
@@ -335,11 +363,6 @@ fn column_x(host: &Window, s: &Split) -> f64 {
     if !state.is_locked(label) {
         return s.game_w;
     }
-    // Automatic: GBF fills the game webview, so the tiled split already puts
-    // the sidebar on the game's right edge and on the window's right edge.
-    if state.is_automatic(label) {
-        return s.game_w;
-    }
     let edge = state.game_edge(label);
     if edge <= 1.0 {
         return s.game_w;
@@ -352,17 +375,22 @@ fn column_x(host: &Window, s: &Split) -> f64 {
     edge.clamp(0.0, inner_w.max(1.0))
 }
 
-/// Locked + a fixed Window Size: shrink/grow the OS window so its right edge
-/// sits on the sidebar. Skipped under Automatic Resizing — there the user can
-/// drag the width, GBF fills the tiled game column, and both edges stay flush
-/// without a hug that would fight the drag (and reload the game).
+/// Locked: shrink/grow the OS window so its right edge sits on the sidebar.
+///
+/// Fixed Window Size hugs immediately. Automatic waits for
+/// `schedule_automatic_hug` so a width drag can let GBF grow up to its cap
+/// first; leftover past that cap is then hugged away (the dead strip between
+/// game and sidebar).
 fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     if !state.is_locked(&label) || state.game_edge(&label) <= 1.0 {
         return Ok(false);
     }
-    if state.is_automatic(&label) || state.hug_busy(&label) {
+    if state.hug_busy(&label) {
+        return Ok(false);
+    }
+    if state.is_automatic(&label) && !state.take_auto_hug_due(&label) {
         return Ok(false);
     }
     let scale = host.scale_factor()?;
@@ -383,6 +411,51 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
         return Err(e);
     }
     Ok(true)
+}
+
+/// After a resize under Automatic, wait for GBF to grow into the extra width.
+/// If it cannot (zoom cap), hug the leftover so it does not sit between the
+/// game and the sidebar.
+fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    if !state.is_locked(&label) || !state.is_automatic(&label) || state.hug_busy(&label) {
+        return;
+    }
+    if state.game_edge(&label) <= 1.0 {
+        return;
+    }
+    let Ok(scale) = host.scale_factor() else {
+        return;
+    };
+    let Ok(phys) = host.inner_size() else {
+        return;
+    };
+    let inner_w = phys.to_logical::<f64>(scale).width;
+    let want_w = col + s.wiki_w + s.sidebar_w;
+    if (inner_w - want_w).abs() <= HUG_SLACK {
+        return;
+    }
+    let gen = state.bump_hug_gen(&label);
+    let app = host.app_handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let state = app.state::<SidebarState>();
+        if state.hug_gen(&label) != gen || !state.is_locked(&label) {
+            return;
+        }
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = app_main.state::<SidebarState>();
+            if state.hug_gen(&label) != gen {
+                return;
+            }
+            state.set_auto_hug_due(&label, true);
+            if let Some(host) = app_main.get_window(&label) {
+                let _ = layout(&host);
+            }
+        });
+    });
 }
 
 fn restore_hug_width(host: &Window) -> String {
@@ -601,6 +674,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         }
     }
 
+    schedule_automatic_hug(host, col, &s);
     state.set_hug_busy(&label, false);
     Ok(out)
 }
