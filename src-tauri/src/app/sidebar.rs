@@ -51,8 +51,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{
-    webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview,
-    WebviewUrl, WebviewWindow, Window, WindowEvent,
+    webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalSize, Url,
+    Webview, WebviewUrl, WebviewWindow, Window, WindowEvent,
 };
 
 /// Expanded width, matching `SIDEBAR_W` in gbf-scaler.js so the two builds are
@@ -105,6 +105,13 @@ struct WindowFlags {
     collapsed_for_panel: bool,
     /// #wrapper's right edge in the game webview, CSS pixels. 0 = unknown.
     game_edge: f64,
+    /// Inner width to restore when unlocking, after a lock hug. 0 = none.
+    hug_saved_w: f64,
+    /// True between our set_size and the Resized layout that follows it.
+    hug_busy: bool,
+    /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`). Hugging there
+    /// reloads the game and the window walks itself down; skip it.
+    automatic: bool,
 }
 
 /// Per-window flags. `--multi-window` must not share collapsed/wiki/lock
@@ -193,6 +200,40 @@ impl SidebarState {
         self.update(label, |f| f.game_edge = right);
     }
 
+    pub fn is_automatic(&self, label: &str) -> bool {
+        self.with(label, |f| f.automatic)
+    }
+
+    pub fn set_automatic(&self, label: &str, on: bool) {
+        self.update(label, |f| f.automatic = on);
+    }
+
+    pub fn hug_busy(&self, label: &str) -> bool {
+        self.with(label, |f| f.hug_busy)
+    }
+
+    pub fn set_hug_busy(&self, label: &str, on: bool) {
+        self.update(label, |f| f.hug_busy = on);
+    }
+
+    pub fn save_hug_width_once(&self, label: &str, width: f64) {
+        self.update(label, |f| {
+            if f.hug_saved_w <= 1.0 {
+                f.hug_saved_w = width;
+            }
+        });
+    }
+
+    pub fn take_hug_saved_w(&self, label: &str) -> f64 {
+        let mut out = 0.0;
+        self.update(label, |f| {
+            out = f.hug_saved_w;
+            f.hug_saved_w = 0.0;
+            f.hug_busy = false;
+        });
+        out
+    }
+
     fn collapse_for_panel(&self, label: &str) {
         self.update(label, |f| {
             f.collapsed = true;
@@ -279,11 +320,14 @@ fn split(host: &Window, collapsed: bool, wiki_open: bool, about_open: bool) -> t
     })
 }
 
+/// Ignore leftover smaller than this when hugging (rounding / DPI).
+const HUG_SLACK: f64 = 8.0;
+
 /// X origin of the wiki/About + sidebar column.
 ///
 /// Unlocked, that is the tiled split (`game_w`). Locked, it is `#wrapper`'s
-/// right edge so the sidebar sits on the game instead of leaving a gap. The
-/// game webview is **not** resized (that would reload under Automatic).
+/// right edge so the sidebar sits on the game. The game webview is not
+/// retiled down to that leftover — that would reload under Automatic.
 fn column_x(host: &Window, s: &Split) -> f64 {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label();
@@ -294,7 +338,81 @@ fn column_x(host: &Window, s: &Split) -> f64 {
     if edge <= 1.0 {
         return s.game_w;
     }
-    edge.clamp(0.0, s.game_w)
+    let inner_w = host
+        .inner_size()
+        .ok()
+        .and_then(|p| host.scale_factor().ok().map(|sc| p.to_logical::<f64>(sc).width))
+        .unwrap_or(s.game_w);
+    edge.clamp(0.0, inner_w.max(1.0))
+}
+
+/// Locked: keep the OS window's right edge on the sidebar's right edge.
+///
+/// Returns true if `set_size` was issued. The following `Resized` event runs
+/// layout for real. Under Automatic Resizing this is a window resize, which
+/// reloads Granblue — same cost as any other window resize in that mode.
+fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    if !state.is_locked(&label) || state.game_edge(&label) <= 1.0 {
+        return Ok(false);
+    }
+    if state.hug_busy(&label) {
+        return Ok(false);
+    }
+    let scale = host.scale_factor()?;
+    let phys = host.inner_size()?;
+    let inner_w = phys.to_logical::<f64>(scale).width;
+    let want_w = col + s.wiki_w + s.sidebar_w;
+    if (inner_w - want_w).abs() <= HUG_SLACK {
+        return Ok(false);
+    }
+    let want_phys = (want_w * scale).round() as u32;
+    if want_phys == 0 || want_phys == phys.width {
+        return Ok(false);
+    }
+    state.save_hug_width_once(&label, inner_w);
+    state.set_hug_busy(&label, true);
+    if let Err(e) = host.set_size(PhysicalSize::new(want_phys, phys.height)) {
+        state.set_hug_busy(&label, false);
+        return Err(e);
+    }
+    Ok(true)
+}
+
+fn restore_hug_width(host: &Window) -> String {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    let saved = state.take_hug_saved_w(&label);
+    if saved <= 1.0 {
+        return "restore=none".into();
+    }
+    let scale = match host.scale_factor() {
+        Ok(v) => v,
+        Err(e) => return format!("restore ERR {e}"),
+    };
+    let phys = match host.inner_size() {
+        Ok(v) => v,
+        Err(e) => return format!("restore ERR {e}"),
+    };
+    let want_phys = (saved * scale).round() as u32;
+    if want_phys == 0 || want_phys == phys.width {
+        return format!("restore=skip saved={saved:.0}");
+    }
+    state.set_hug_busy(&label, true);
+    match host.set_size(PhysicalSize::new(want_phys, phys.height)) {
+        Ok(()) => format!("restore={saved:.0}"),
+        Err(e) => {
+            state.set_hug_busy(&label, false);
+            format!("restore ERR {e}")
+        }
+    }
+}
+
+fn locked_overlay_game(host: &Window) -> bool {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label();
+    state.is_locked(label) && state.game_edge(label) > 1.0
 }
 
 /// How much width the wiki could take right now, without opening it.
@@ -350,56 +468,7 @@ fn ensure_panel_room(host: &Window, min_w: f64, name: &str) -> Result<String, St
 /// no page zoom folded into `devicePixelRatio` to correct for. The drift bug
 /// that Patch 2 in GBF_Pake_UPSTREAM_PATCHES.md exists to fix cannot occur here.
 pub fn layout(host: &Window) -> tauri::Result<()> {
-    let state = host.app_handle().state::<SidebarState>();
-    let label = host.label().to_string();
-    let collapsed = state.is_collapsed(&label);
-    let wiki_open = state.wiki_is_open(&label);
-    let about_open = state.about_is_open(&label);
-    let locked = state.is_locked(&label);
-    let s = split(host, collapsed, wiki_open, about_open)?;
-    if s.height <= 0.0 {
-        return Ok(()); // minimized; the next Resized event carries real numbers
-    }
-    let col = column_x(host, &s);
-
-    if let Some(game) = game_webview(host) {
-        game.set_position(LogicalPosition::new(0.0, 0.0))?;
-        game.set_size(LogicalSize::new(s.game_w, s.height))?;
-    }
-
-    // The wiki keeps its webview once created, so a closed panel is hidden
-    // rather than destroyed. That is the point of it being its own webview:
-    // your page, scroll position and history survive being closed and
-    // reopened, and survive the game reloading beside it.
-    if let Some(wiki) = wiki_webview(host) {
-        if wiki_open && s.wiki_w > 0.0 {
-            wiki.set_position(LogicalPosition::new(col, 0.0))?;
-            wiki.set_size(LogicalSize::new(s.wiki_w, s.height))?;
-            let _ = wiki.show();
-        } else {
-            let _ = wiki.hide();
-        }
-    }
-
-    if let Some(about) = about_webview(host) {
-        if about_open && s.wiki_w > 0.0 {
-            about.set_position(LogicalPosition::new(col, 0.0))?;
-            about.set_size(LogicalSize::new(s.wiki_w, s.height))?;
-            let _ = about.show();
-        } else {
-            let _ = about.hide();
-        }
-    }
-
-    if let Some(bar) = sidebar_webview(host) {
-        bar.set_position(LogicalPosition::new(col + s.wiki_w, 0.0))?;
-        bar.set_size(LogicalSize::new(s.sidebar_w, s.height))?;
-        // Rust owns both flags; the page only renders them. One source of
-        // truth, so the two can never disagree.
-        let _ = bar.eval(format!(
-            "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},locked:{locked}}})"
-        ));
-    }
+    let _ = apply_layout(host)?;
     Ok(())
 }
 
@@ -410,33 +479,54 @@ pub fn layout(host: &Window) -> tauri::Result<()> {
 /// target, and a skipped relayout prints nothing and returns Ok -- so this is
 /// the only way to see what actually happened.
 fn layout_verbose(host: &Window) -> String {
+    match apply_layout(host) {
+        Ok(text) => text,
+        Err(e) => format!("layout ERR {e}"),
+    }
+}
+
+fn apply_layout(host: &Window) -> tauri::Result<String> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     let collapsed = state.is_collapsed(&label);
     let wiki_open = state.wiki_is_open(&label);
     let about_open = state.about_is_open(&label);
-    let sp = match split(host, collapsed, wiki_open, about_open) {
-        Ok(v) => v,
-        Err(e) => return format!("split ERR {e}"),
-    };
-    let col = column_x(host, &sp);
     let locked = state.is_locked(&label);
+    let automatic = state.is_automatic(&label);
+    let s = split(host, collapsed, wiki_open, about_open)?;
+    if s.height <= 0.0 {
+        state.set_hug_busy(&label, false);
+        return Ok("layout: minimized\n".into());
+    }
+    let col = column_x(host, &s);
     let edge = state.game_edge(&label);
+    let want_w = col + s.wiki_w + s.sidebar_w;
 
     let mut out = format!(
-        "want game={:.0} panel={:.0} bar={:.0} col={col:.0} edge={edge:.0} locked={locked} h={:.0} wiki={wiki_open} about={about_open}\n",
-        sp.game_w, sp.wiki_w, sp.sidebar_w, sp.height
+        "want game={:.0} panel={:.0} bar={:.0} col={col:.0} edge={edge:.0} locked={locked} auto={automatic} hug={want_w:.0} h={:.0} wiki={wiki_open} about={about_open}\n",
+        s.game_w, s.wiki_w, s.sidebar_w, s.height
     );
 
+    if maybe_hug_window(host, col, &s)? {
+        out.push_str("hug: set_size issued\n");
+        return Ok(out);
+    }
+
+    let scale = host.scale_factor()?;
+    let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
+    let game_w = if locked_overlay_game(host) {
+        inner_w.max(1.0)
+    } else {
+        s.game_w
+    };
+
     match game_webview(host) {
-        None => out.push_str("game webview NOT FOUND
-"),
+        None => out.push_str("game webview NOT FOUND\n"),
         Some(game) => {
             let p = game.set_position(LogicalPosition::new(0.0, 0.0));
-            let z = game.set_size(LogicalSize::new(sp.game_w, sp.height));
+            let z = game.set_size(LogicalSize::new(game_w, s.height));
             out.push_str(&format!(
-                "game pos={} size={} now={}
-",
+                "game pos={} size={} now={}\n",
                 result_word(&p),
                 result_word(&z),
                 bounds_word(&game),
@@ -444,25 +534,26 @@ fn layout_verbose(host: &Window) -> String {
         }
     }
 
+    // The wiki keeps its webview once created, so a closed panel is hidden
+    // rather than destroyed. That is the point of it being its own webview:
+    // your page, scroll position and history survive being closed and
+    // reopened, and survive the game reloading beside it.
     match wiki_webview(host) {
-        None => out.push_str("wiki: not created
-"),
+        None => out.push_str("wiki: not created\n"),
         Some(wiki) => {
-            if wiki_open && sp.wiki_w > 0.0 {
+            if wiki_open && s.wiki_w > 0.0 {
                 let p = wiki.set_position(LogicalPosition::new(col, 0.0));
-                let z = wiki.set_size(LogicalSize::new(sp.wiki_w, sp.height));
+                let z = wiki.set_size(LogicalSize::new(s.wiki_w, s.height));
                 let v = wiki.show();
                 out.push_str(&format!(
-                    "wiki pos={} size={} show={} now={}
-",
+                    "wiki pos={} size={} show={} now={}\n",
                     result_word(&p),
                     result_word(&z),
                     result_word(&v),
                     bounds_word(&wiki),
                 ));
             } else {
-                out.push_str(&format!("wiki hide={}
-", result_word(&wiki.hide())));
+                out.push_str(&format!("wiki hide={}\n", result_word(&wiki.hide())));
             }
         }
     }
@@ -470,9 +561,9 @@ fn layout_verbose(host: &Window) -> String {
     match about_webview(host) {
         None => out.push_str("about: not created\n"),
         Some(about) => {
-            if about_open && sp.wiki_w > 0.0 {
+            if about_open && s.wiki_w > 0.0 {
                 let p = about.set_position(LogicalPosition::new(col, 0.0));
-                let z = about.set_size(LogicalSize::new(sp.wiki_w, sp.height));
+                let z = about.set_size(LogicalSize::new(s.wiki_w, s.height));
                 let v = about.show();
                 out.push_str(&format!(
                     "about pos={} size={} show={} now={}\n",
@@ -488,18 +579,15 @@ fn layout_verbose(host: &Window) -> String {
     }
 
     match sidebar_webview(host) {
-        None => out.push_str("sidebar webview NOT FOUND
-"),
+        None => out.push_str("sidebar webview NOT FOUND\n"),
         Some(bar) => {
-            let p = bar.set_position(LogicalPosition::new(col + sp.wiki_w, 0.0));
-            let z = bar.set_size(LogicalSize::new(sp.sidebar_w, sp.height));
-            let locked = host.app_handle().state::<SidebarState>().is_locked(host.label());
+            let p = bar.set_position(LogicalPosition::new(col + s.wiki_w, 0.0));
+            let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
                 "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},locked:{locked}}})"
             ));
             out.push_str(&format!(
-                "bar pos={} size={} eval={} now={}
-",
+                "bar pos={} size={} eval={} now={}\n",
                 result_word(&p),
                 result_word(&z),
                 result_word(&e),
@@ -508,7 +596,8 @@ fn layout_verbose(host: &Window) -> String {
         }
     }
 
-    out
+    state.set_hug_busy(&label, false);
+    Ok(out)
 }
 
 fn result_word<T>(r: &tauri::Result<T>) -> String {
@@ -644,9 +733,10 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let collapsed = window.app_handle().state::<SidebarState>().is_collapsed(window.label());
     let locked = window.app_handle().state::<SidebarState>().is_locked(window.label());
     let edge = window.app_handle().state::<SidebarState>().game_edge(window.label());
+    let automatic = window.app_handle().state::<SidebarState>().is_automatic(window.label());
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nedge={edge:.0}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -944,18 +1034,21 @@ fn set_lock(host: &Window, on: bool) -> String {
     host.app_handle()
         .state::<SidebarState>()
         .set_locked(host.label(), on);
+    let mut extra = String::new();
     if !on {
         host.app_handle()
             .state::<SidebarState>()
             .set_game_edge(host.label(), 0.0);
+        extra.push(' ');
+        extra.push_str(&restore_hug_width(host));
     }
     match game_webview(host) {
         Some(game) => {
             let lock = result_word(&game.eval(lock_js(on)));
             let hug = result_word(&game.eval(hug_js(on)));
-            format!("lock({on})={lock} hug={hug}")
+            format!("lock({on})={lock} hug={hug}{extra}")
         }
-        None => "lock: game webview NOT FOUND".to_string(),
+        None => format!("lock: game webview NOT FOUND{extra}"),
     }
 }
 
@@ -992,15 +1085,19 @@ pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
 }
 
 /// #wrapper's right edge, from the game webview. Only applied while locked.
+/// Hugging the OS window to that edge happens in `layout` automatically.
 #[tauri::command]
-pub fn gbf_game_edge(window: Window, right: f64) -> Result<(), String> {
+pub fn gbf_game_edge(window: Window, right: f64, automatic: bool) -> Result<(), String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
     let state = app.state::<SidebarState>();
     if !state.is_locked(&label) {
         return Ok(());
     }
-    if (state.game_edge(&label) - right).abs() < 0.5 {
+    let same_edge = (state.game_edge(&label) - right).abs() < 0.5;
+    let same_auto = state.is_automatic(&label) == automatic;
+    state.set_automatic(&label, automatic);
+    if same_edge && same_auto {
         return Ok(());
     }
     state.set_game_edge(&label, right);

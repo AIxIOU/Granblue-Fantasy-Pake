@@ -6,10 +6,21 @@
   window.__gbfEdgeInit = true;
 
   var timer = 0;
+  function automatic() {
+    try {
+      return !!(
+        window.Game &&
+        window.Game.setting &&
+        window.Game.setting.mobage_fixwindowsize === 0
+      );
+    } catch (e) {
+      return false;
+    }
+  }
   function send(right) {
     var t = window.__TAURI__;
     if (!window.__gbfHug || !t || !t.core || !t.core.invoke) return;
-    t.core.invoke("gbf_game_edge", { right: right });
+    t.core.invoke("gbf_game_edge", { right: right, automatic: automatic() });
   }
 
   window.__gbfReportEdge = function () {
