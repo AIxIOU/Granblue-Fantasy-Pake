@@ -104,6 +104,9 @@ const LAYOUT_STATE_FILE: &str = "gbf-layout.json";
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 struct SavedLayout {
     locked: bool,
+    /// Wiki sits to the right of the sidebar. False = between game and sidebar.
+    #[serde(default)]
+    wiki_outside: bool,
 }
 
 fn layout_state_path(app: &AppHandle) -> Option<PathBuf> {
@@ -136,6 +139,7 @@ pub fn persist_layout_state(app: &AppHandle) {
             label.clone(),
             SavedLayout {
                 locked: sidebar.is_locked(label),
+                wiki_outside: sidebar.is_wiki_outside(label),
             },
         );
     }
@@ -159,11 +163,21 @@ fn restore_layout_locked(app: &AppHandle, label: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn restore_layout_wiki_outside(app: &AppHandle, label: &str) -> bool {
+    load_layout_states(app)
+        .get(label)
+        .map(|s| s.wiki_outside)
+        .unwrap_or(false)
+}
+
 #[derive(Default, Clone, Copy)]
 struct WindowFlags {
     collapsed: bool,
     wiki_open: bool,
     about_open: bool,
+    /// Wiki/About sit to the right of the sidebar (live-client order).
+    /// False = between the game and the sidebar.
+    wiki_outside: bool,
     locked: bool,
     lock_was_auto: bool,
     /// True when we collapsed the sidebar ourselves to free width for a panel.
@@ -260,6 +274,14 @@ impl SidebarState {
 
     pub fn is_locked(&self, label: &str) -> bool {
         self.with(label, |f| f.locked)
+    }
+
+    pub fn is_wiki_outside(&self, label: &str) -> bool {
+        self.with(label, |f| f.wiki_outside)
+    }
+
+    pub fn set_wiki_outside(&self, label: &str, on: bool) {
+        self.update(label, |f| f.wiki_outside = on);
     }
 
     pub fn set_locked(&self, label: &str, on: bool) {
@@ -936,6 +958,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let about_open = state.about_is_open(&label);
     let locked = state.is_locked(&label);
     let automatic = state.is_automatic(&label);
+    let outside = state.is_wiki_outside(&label);
     let s = split(host, collapsed, wiki_open, about_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
@@ -946,7 +969,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let want_w = col + s.wiki_w + s.sidebar_w;
 
     let mut out = format!(
-        "want game={:.0} panel={:.0} bar={:.0} col={col:.0} edge={edge:.0} locked={locked} auto={automatic} hug={want_w:.0} h={:.0} wiki={wiki_open} about={about_open}\n",
+        "want game={:.0} panel={:.0} bar={:.0} col={col:.0} edge={edge:.0} locked={locked} auto={automatic} outside={outside} hug={want_w:.0} h={:.0} wiki={wiki_open} about={about_open}\n",
         s.game_w, s.wiki_w, s.sidebar_w, s.height
     );
 
@@ -1009,12 +1032,20 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     // rather than destroyed. That is the point of it being its own webview:
     // your page, scroll position and history survive being closed and
     // reopened, and survive the game reloading beside it.
+    let panel_w = if (wiki_open || about_open) && s.wiki_w > 0.0 {
+        s.wiki_w
+    } else {
+        0.0
+    };
+    let bar_x = if outside { col } else { col + panel_w };
+    let panel_x = if outside { col + s.sidebar_w } else { col };
+
     match wiki_webview(host) {
         None => out.push_str("wiki: not created\n"),
         Some(wiki) => {
-            if wiki_open && s.wiki_w > 0.0 {
-                let p = wiki.set_position(LogicalPosition::new(col, 0.0));
-                let z = wiki.set_size(LogicalSize::new(s.wiki_w, s.height));
+            if wiki_open && panel_w > 0.0 {
+                let p = wiki.set_position(LogicalPosition::new(panel_x, 0.0));
+                let z = wiki.set_size(LogicalSize::new(panel_w, s.height));
                 let v = wiki.show();
                 out.push_str(&format!(
                     "wiki pos={} size={} show={} now={}\n",
@@ -1032,9 +1063,9 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     match about_webview(host) {
         None => out.push_str("about: not created\n"),
         Some(about) => {
-            if about_open && s.wiki_w > 0.0 {
-                let p = about.set_position(LogicalPosition::new(col, 0.0));
-                let z = about.set_size(LogicalSize::new(s.wiki_w, s.height));
+            if about_open && panel_w > 0.0 {
+                let p = about.set_position(LogicalPosition::new(panel_x, 0.0));
+                let z = about.set_size(LogicalSize::new(panel_w, s.height));
                 let v = about.show();
                 out.push_str(&format!(
                     "about pos={} size={} show={} now={}\n",
@@ -1052,10 +1083,10 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     match sidebar_webview(host) {
         None => out.push_str("sidebar webview NOT FOUND\n"),
         Some(bar) => {
-            let p = bar.set_position(LogicalPosition::new(col + s.wiki_w, 0.0));
+            let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},locked:{locked}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},locked:{locked},wikiOutside:{outside}}})"
             ));
             out.push_str(&format!(
                 "bar pos={} size={} eval={} now={}\n",
@@ -1121,6 +1152,11 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     // restored from disk.
     if restore_layout_locked(host.app_handle(), host.label()) {
         let _ = set_lock(&host, true);
+    }
+    if restore_layout_wiki_outside(host.app_handle(), host.label()) {
+        host.app_handle()
+            .state::<SidebarState>()
+            .set_wiki_outside(host.label(), true);
     }
 
     layout(&host)?;
@@ -1234,6 +1270,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let hug_busy = window.app_handle().state::<SidebarState>().hug_busy(window.label());
     let last_hug = window.app_handle().state::<SidebarState>().last_hug_phys_w(window.label());
     let wiki_panel = window.app_handle().state::<SidebarState>().wiki_panel_w(window.label());
+    let wiki_outside = window.app_handle().state::<SidebarState>().is_wiki_outside(window.label());
     let persist = crate::app::window::persisted_window_state_path(window.app_handle())
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "none".into());
@@ -1243,7 +1280,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let monitor = monitor_inner_ceiling(&window);
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_panel={wiki_panel:.0}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -1656,6 +1693,33 @@ pub fn gbf_toggle_lock(window: Window) -> Result<String, String> {
         .recv_timeout(std::time::Duration::from_secs(8))
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
     Ok(format!("locked={now}\n{report}"))
+}
+
+/// Place the wiki/About between the game and the sidebar (`outside=false`) or
+/// on the sidebar's outer right edge (`outside=true`, live-client order).
+#[tauri::command]
+pub fn gbf_set_wiki_outside(window: Window, outside: bool) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    app.state::<SidebarState>().set_wiki_outside(&label, outside);
+    persist_layout_state(&app);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = label;
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            Some(host) => layout_verbose(&host),
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    Ok(format!("wiki_outside={outside}\n{report}"))
 }
 
 /// #wrapper's right edge, from the game webview. Only applied while locked.
