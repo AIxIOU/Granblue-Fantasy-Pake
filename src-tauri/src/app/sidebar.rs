@@ -456,6 +456,29 @@ impl SidebarState {
         })
     }
 
+    /// Granblue's Size/Full changed the wrapper. Hug leftover. A user OS
+    /// width-drag must not use this — that leftover is grow room (115347).
+    pub fn hug_if_game_size_changed(
+        &self,
+        label: &str,
+        prev_edge: f64,
+        right: f64,
+        prev_auto: bool,
+        now_auto: bool,
+    ) {
+        if !self.is_locked(label) {
+            return;
+        }
+        if self.last_auto_resize_recent(label, std::time::Duration::from_millis(2000)) {
+            return;
+        }
+        let auto_flipped = prev_auto != now_auto;
+        let edge_jumped = prev_edge > 1.0 && (prev_edge - right).abs() > 40.0;
+        if auto_flipped || edge_jumped {
+            self.set_panel_hug_due(label, true);
+        }
+    }
+
     pub fn last_hug_phys_w(&self, label: &str) -> u32 {
         self.with(label, |f| f.last_hug_phys_w)
     }
@@ -2238,6 +2261,7 @@ pub fn gbf_game_edge(
     let same_auto = state.is_automatic(&label) == automatic;
     let dpr_first = state.game_dpr(&label) <= 0.05 && dpr > 0.05;
     let overlay_changed = !same_overlay;
+    let prev_auto = state.is_automatic(&label);
     state.set_automatic(&label, automatic);
     if dpr > 0.05 {
         state.set_game_dpr(&label, dpr);
@@ -2267,8 +2291,17 @@ pub fn gbf_game_edge(
                 if pending_zoom > 0.05 {
                     state.set_game_zoom(&win_label, pending_zoom);
                 }
+                let prev_edge = state.game_edge(&win_label);
+                let prev_auto = state.is_automatic(&win_label);
                 state.set_game_edge(&win_label, pending_right);
                 state.set_game_overlay(&win_label, pending_overlay);
+                state.hug_if_game_size_changed(
+                    &win_label,
+                    prev_edge,
+                    pending_right,
+                    prev_auto,
+                    true,
+                );
                 if let Some(host) = app.get_window(&win_label) {
                     let _ = layout(&host);
                 }
@@ -2288,6 +2321,7 @@ pub fn gbf_game_edge(
     }
     state.set_game_edge(&label, right);
     state.set_game_overlay(&label, overlay);
+    state.hug_if_game_size_changed(&label, current_edge, right, prev_auto, automatic);
     if dpr_first || overlay_changed {
         // Automatic lock: leftover is grow room until GBF hits its cap.
         // Hugging on every overlay report snaps a width-drag back
