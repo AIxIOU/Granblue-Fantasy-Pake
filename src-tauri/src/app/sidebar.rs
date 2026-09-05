@@ -100,6 +100,9 @@ struct WindowFlags {
     about_open: bool,
     locked: bool,
     lock_was_auto: bool,
+    /// True when we collapsed the sidebar ourselves to free width for a panel.
+    /// Closing the last panel restores it; a manual toggle takes ownership.
+    collapsed_for_panel: bool,
 }
 
 /// Per-window flags. `--multi-window` must not share collapsed/wiki/lock
@@ -128,6 +131,7 @@ impl SidebarState {
         let mut out = false;
         self.update(label, |f| {
             f.collapsed = !f.collapsed;
+            f.collapsed_for_panel = false;
             out = f.collapsed;
         });
         out
@@ -177,6 +181,22 @@ impl SidebarState {
 
     pub fn set_lock_was_auto(&self, label: &str, on: bool) {
         self.update(label, |f| f.lock_was_auto = on);
+    }
+
+    fn collapse_for_panel(&self, label: &str) {
+        self.update(label, |f| {
+            f.collapsed = true;
+            f.collapsed_for_panel = true;
+        });
+    }
+
+    fn restore_collapse_for_panel(&self, label: &str) {
+        self.update(label, |f| {
+            if f.collapsed_for_panel && !f.wiki_open && !f.about_open {
+                f.collapsed = false;
+                f.collapsed_for_panel = false;
+            }
+        });
     }
 }
 
@@ -260,6 +280,38 @@ fn wiki_room(host: &Window, collapsed: bool) -> tauri::Result<f64> {
     };
     let sidebar_w = want_bar.min((size.width - MIN_GAME_WIDTH).max(0.0));
     Ok((size.width - MIN_GAME_WIDTH - sidebar_w).max(0.0))
+}
+
+/// Free panel width, collapsing the sidebar if that is what makes the difference.
+/// Matches `main`, which collapses the nav to open About/wiki. Under Automatic
+/// Resizing this collapse reloads the game — same as a manual toggle.
+fn ensure_panel_room(host: &Window, min_w: f64, name: &str) -> Result<String, String> {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    let collapsed = state.is_collapsed(&label);
+    let room = wiki_room(host, collapsed).map_err(|e| e.to_string())?;
+    if room >= min_w {
+        return Ok(String::new());
+    }
+    if collapsed {
+        return Err(format!(
+            "Not enough room for the {name}. Widen the window by about {:.0}px.",
+            (min_w - room).ceil()
+        ));
+    }
+    state.collapse_for_panel(&label);
+    let room2 = wiki_room(host, true).map_err(|e| e.to_string())?;
+    if room2 < min_w {
+        state.update(&label, |f| {
+            f.collapsed = false;
+            f.collapsed_for_panel = false;
+        });
+        return Err(format!(
+            "Not enough room for the {name}. Widen the window by about {:.0}px.",
+            (min_w - room2).ceil()
+        ));
+    }
+    Ok("Sidebar collapsed to make room.\n".into())
 }
 
 /// Place both webviews side by side across the window's client area.
@@ -676,19 +728,17 @@ fn apply_panel_lock(host: &Window, opening: bool) -> String {
 pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
-    let collapsed = app.state::<SidebarState>().is_collapsed(&label);
     let was_open = app.state::<SidebarState>().wiki_is_open(&label);
 
-    if !was_open {
-        let room = wiki_room(&window, collapsed).map_err(|e| e.to_string())?;
-        if room < WIKI_MIN_W {
-            return Err(format!(
-                "Not enough room for the wiki. Widen the window by about {:.0}px, or collapse the sidebar.",
-                (WIKI_MIN_W - room).ceil()
-            ));
-        }
-    }
-    app.state::<SidebarState>().set_wiki_open(&label, !was_open);
+    let extra = if !was_open {
+        let note = ensure_panel_room(&window, WIKI_MIN_W, "wiki")?;
+        app.state::<SidebarState>().set_wiki_open(&label, true);
+        note
+    } else {
+        app.state::<SidebarState>().set_wiki_open(&label, false);
+        app.state::<SidebarState>().restore_collapse_for_panel(&label);
+        String::new()
+    };
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let handle = app.clone();
@@ -697,7 +747,7 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
     app.run_on_main_thread(move || {
         let report = match handle.get_window(&win_label) {
             Some(host) => {
-                let mut out = String::new();
+                let mut out = extra.clone();
                 let open_now = handle.state::<SidebarState>().wiki_is_open(&win_label);
                 out.push_str(&apply_panel_lock(&host, open_now));
                 if open_now {
@@ -732,19 +782,17 @@ pub fn gbf_wiki_toggle(window: Window) -> Result<String, String> {
 pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
-    let collapsed = app.state::<SidebarState>().is_collapsed(&label);
     let was_open = app.state::<SidebarState>().about_is_open(&label);
 
-    if !was_open {
-        let room = wiki_room(&window, collapsed).map_err(|e| e.to_string())?;
-        if room < ABOUT_MIN_W {
-            return Err(format!(
-                "Not enough room for About. Widen the window by about {:.0}px, or collapse the sidebar.",
-                (ABOUT_MIN_W - room).ceil()
-            ));
-        }
-    }
-    app.state::<SidebarState>().set_about_open(&label, !was_open);
+    let extra = if !was_open {
+        let note = ensure_panel_room(&window, ABOUT_MIN_W, "About")?;
+        app.state::<SidebarState>().set_about_open(&label, true);
+        note
+    } else {
+        app.state::<SidebarState>().set_about_open(&label, false);
+        app.state::<SidebarState>().restore_collapse_for_panel(&label);
+        String::new()
+    };
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let handle = app.clone();
@@ -753,7 +801,7 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
     app.run_on_main_thread(move || {
         let report = match handle.get_window(&win_label) {
             Some(host) => {
-                let mut out = String::new();
+                let mut out = extra.clone();
                 let open_now = handle.state::<SidebarState>().about_is_open(&win_label);
                 out.push_str(&apply_panel_lock(&host, open_now));
                 out.push_str(&layout_verbose(&host));
