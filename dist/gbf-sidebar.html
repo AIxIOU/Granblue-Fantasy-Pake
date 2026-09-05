@@ -379,27 +379,6 @@
     if (ref) nav.insertBefore(gs, ref);
     else nav.appendChild(gs);
   })();
-      if (item.cmd) {
-        say(item.label + "…");
-        invoke(item.cmd, item.args || {})
-          .then(function (r) {
-            if (typeof r === "string" && r.indexOf("NOTICE ") === 0) {
-              showNotice(r.slice(7));
-              return;
-            }
-            say(item.label + " ok");
-            dump(r);
-          })
-          .catch(function (e) { say(String(e && e.message ? e.message : e)); });
-        return;
-      }
-      say("nav " + item.label + "…");
-      invoke("gbf_nav", { hash: item.hash })
-        .then(function () { say("nav ok: " + item.label); })
-        .catch(function (e) { say("nav FAILED: " + (e && e.message ? e.message : e)); });
-    });
-    nav.appendChild(b);
-  });
 
   document.getElementById("wback").addEventListener("click", function () {
     invoke("gbf_wiki_back").catch(function (e) { say(String(e)); });
@@ -455,6 +434,7 @@
       document.body.classList.toggle("automatic", auto);
 
       // Desktop: Layout (Lock to game). Mobile: Game size (Large / Small).
+      // On mobile, GBF's Automatic flag is always 0 — do not hide Wiki for it.
       var isMobile = !!st.mobile;
       document.body.classList.toggle("mobile", isMobile);
       var layoutSec = document.getElementById("sec-layout");
@@ -470,9 +450,9 @@
       if (full) full.classList.toggle("active", isMobile && !st.mobileHalf);
       if (half) half.classList.toggle("active", isMobile && !!st.mobileHalf);
       var wikiRow = document.getElementById("nav-wiki");
-      if (wikiRow) wikiRow.hidden = auto;
+      if (wikiRow) wikiRow.hidden = auto && !isMobile;
       var wikiSec = document.getElementById("sec-reference");
-      if (wikiSec) wikiSec.hidden = auto;
+      if (wikiSec) wikiSec.hidden = auto && !isMobile;
     },
 
     notice: showNotice,
