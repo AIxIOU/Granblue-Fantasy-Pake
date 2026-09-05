@@ -9,6 +9,8 @@ use dispatch::Queue;
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
 use objc2_web_kit::WKUserContentController;
+#[cfg(target_os = "windows")]
+use std::{os::windows::ffi::OsStrExt, ptr, sync::OnceLock};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -16,8 +18,6 @@ use std::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
     time::Duration,
 };
-#[cfg(target_os = "windows")]
-use std::{os::windows::ffi::OsStrExt, ptr, sync::OnceLock};
 use tauri::{
     webview::{DownloadEvent, NewWindowFeatures, NewWindowResponse},
     AppHandle, Config, Manager, PhysicalPosition, PhysicalSize, Url, WebviewUrl, WebviewWindow,
@@ -854,10 +854,7 @@ fn build_window(
                 } else {
                     MessageType::Failure
                 };
-                show_toast(
-                    &webview,
-                    &get_download_message_with_lang(message_type, None),
-                );
+                show_toast(&webview, &get_download_message_with_lang(message_type, None));
                 true
             }
             _ => true,
