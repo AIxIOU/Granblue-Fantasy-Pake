@@ -37,27 +37,19 @@
     var t = window.__TAURI__;
     if (!t || !t.core || !t.core.invoke) return;
     var el = document.getElementById("wrapper");
-    if (!el) {
-      t.core.invoke("gbf_game_edge", {
-        right: 0,
-        overlay: 0,
-        automatic: false,
-        dpr: 0,
-      });
-      return;
-    }
+    if (!el) return;
     var r = el.getBoundingClientRect();
-    if (r.width <= 0) {
-      t.core.invoke("gbf_game_edge", {
-        right: 0,
-        overlay: 0,
-        automatic: false,
-        dpr: 0,
-      });
-      return;
-    }
+    if (r.width <= 0) return;
     var auto = automatic();
     if (auto === null) return;
+    // Reload paints #wrapper at the unzoomed 320px base before GBF applies
+    // container zoom. Reporting that walks the sidebar into the game and,
+    // under Automatic, tiles the webview to Small so the zoom never recovers.
+    var zoom = 1;
+    try {
+      if (typeof Game.getZoom === "function") zoom = Game.getZoom() || 1;
+    } catch (e) {}
+    if (r.right + 24 < 320 * zoom) return;
     t.core.invoke("gbf_game_edge", {
       right: r.right,
       overlay: overlayRight(),

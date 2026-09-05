@@ -2044,6 +2044,9 @@ fn set_lock(host: &Window, on: bool) -> String {
         host.app_handle()
             .state::<SidebarState>()
             .set_game_keep_w(host.label(), 0.0);
+        host.app_handle()
+            .state::<SidebarState>()
+            .set_panel_hug_due(host.label(), true);
     }
     let mut extra = String::new();
     if !on {
@@ -2148,20 +2151,8 @@ pub fn gbf_game_edge(
     let dpr = dpr.filter(|v| *v > 0.05).unwrap_or(0.0);
     let overlay = overlay.unwrap_or(0.0);
     if right <= 1.0 {
-        if state.game_edge(&label) <= 1.0 && state.game_overlay(&label) <= 1.0 {
-            return Ok(());
-        }
-        state.set_game_edge(&label, 0.0);
-        state.set_game_overlay(&label, 0.0);
-        state.set_game_dpr(&label, 0.0);
-        let handle = app.clone();
-        let win_label = label;
-        app.run_on_main_thread(move || {
-            if let Some(host) = handle.get_window(&win_label) {
-                let _ = layout(&host);
-            }
-        })
-        .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+        // Reload removes #wrapper for a moment. Keep the last edge instead
+        // of snapping the sidebar to x=0 / tiling the game to Small.
         return Ok(());
     }
     let same_edge = (state.game_edge(&label) - right).abs() < 0.5;
