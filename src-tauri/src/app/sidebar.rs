@@ -1432,7 +1432,7 @@ fn bounds_word(w: &Webview) -> String {
 }
 
 /// Add the sidebar webview beside the game and keep it laid out.
-/// `gbf-sidebar.html` is bundled from dist at compile.
+/// `gbf-sidebar.html` is bundled from dist at compile time.
 pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     let label = sidebar_label(window.label());
     let host = window.as_ref().window();

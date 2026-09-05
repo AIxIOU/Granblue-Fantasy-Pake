@@ -86,19 +86,20 @@
   .btn .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .btn .key { color: var(--fg-dim); font-size: 10px; }
 
-  /* Mobile only. Large over Small, sized to the labels. Collapsed: L over S. */
-  #game-size { flex: 0 0 auto; }
+  /* Mobile only. Large over Small, compact, left-aligned with the nav. */
+  #game-size { flex: 0 0 auto; width: 100%; }
   .size-row {
     display: flex;
     flex-direction: column;
     align-items: stretch;
     width: max-content;
-    margin: 0 auto;
+    margin: 0;
     gap: 4px;
-    padding: 4px 10px 10px;
+    padding: 4px 12px 10px;
   }
   .size-btn {
     padding: 4px 8px;
+    text-align: left;
     background: none;
     border: 1px solid var(--line);
     border-radius: 6px;
@@ -117,7 +118,6 @@
   .size-btn .short { display: none; }
   body.collapsed .size-row {
     width: auto;
-    margin: 0;
     align-items: stretch;
     gap: 4px;
     padding: 4px 6px 8px;
