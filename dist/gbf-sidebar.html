@@ -86,7 +86,7 @@
   .btn .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .btn .key { color: var(--fg-dim); font-size: 10px; }
 
-  /* Mobile only. Icon + one button; Large / Small text, active word highlighted. */
+  /* Mobile only. Icon + Large / Small text; active word highlighted. */
   #game-size { flex: 0 0 auto; width: 100%; }
   .size-line {
     display: flex;
@@ -110,28 +110,32 @@
   .size-toggle {
     display: flex;
     flex-direction: row;
-    align-items: center;
+    align-items: baseline;
     width: max-content;
     gap: 8px;
     margin: 0;
-    padding: 4px 10px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
+    padding: 0;
+    border: 0;
     background: none;
   }
   .size-opt {
+    appearance: none;
+    -webkit-appearance: none;
     padding: 0;
-    background: none;
+    background: transparent;
     border: 0;
+    box-shadow: none;
+    outline: none;
     color: var(--fg-dim);
     font: inherit;
-    font-size: 12px;
     cursor: pointer;
   }
-  .size-opt:hover { color: var(--fg); }
+  .size-opt:hover { color: var(--fg); background: transparent; }
   .size-opt.active {
     color: var(--accent);
     font-weight: 600;
+    background: transparent;
+    box-shadow: none;
   }
   body.collapsed .size-line {
     justify-content: center;
@@ -390,11 +394,12 @@
     row.setAttribute("role", "group");
     row.setAttribute("aria-label", "Game size");
     function sizeOpt(id, label, half) {
-      var b = document.createElement("button");
-      b.type = "button";
+      var b = document.createElement("span");
       b.className = "size-opt";
       b.id = id;
       b.title = label;
+      b.setAttribute("role", "button");
+      b.tabIndex = 0;
       b.textContent = label;
       b.addEventListener("click", function () {
         say(label + "…");
