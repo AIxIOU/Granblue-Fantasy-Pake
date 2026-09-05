@@ -645,7 +645,33 @@ pub fn gbf_toggle_app_windows(app: AppHandle) -> Result<String, String> {
     ))
 }
 
-/// Create the wiki webview, blank and hidden, during window setup.
+/// Open a `--multi-window` clone with its own sidebar. Tray New Window uses
+/// the same `open_additional_window` path; this exists so it can be verified
+/// without finding the tray icon (same reason as `gbf_toggle_app_windows`).
+#[tauri::command]
+pub fn gbf_new_window(app: AppHandle) -> Result<String, String> {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let report = match crate::app::window::open_additional_window(&app) {
+            Ok(window) => {
+                let opened = window.label().to_string();
+                let host = window.as_ref().window();
+                let mut labels: Vec<String> = app.windows().keys().cloned().collect();
+                labels.sort();
+                let webviews: Vec<String> =
+                    host.webviews().iter().map(|w| w.label().to_string()).collect();
+                format!("opened={opened} windows()={labels:?} webviews={webviews:?}")
+            }
+            Err(error) => format!("open_additional_window ERR {error}"),
+        };
+        let _ = tx.send(report);
+    });
+    Ok(rx
+        .recv_timeout(std::time::Duration::from_secs(12))
+        .unwrap_or_else(|e| format!("new window never replied: {e}")))
+}
+
+/// Create the wiki webview, blank and hidden, during `attach()`.
 ///
 /// # Why it is created here rather than on first open
 ///
@@ -653,12 +679,15 @@ pub fn gbf_toggle_app_windows(app: AppHandle) -> Result<String, String> {
 /// callback never returns: the invoke stays pending forever, though the app
 /// keeps running and the window keeps answering messages. Creating a webview
 /// needs the event loop to turn, and a main-thread callback is itself running
-/// on that loop. During `setup` the loop has not started yet, so `add_child`
-/// works there -- which is why `attach()` succeeds.
+/// on that loop.
 ///
-/// So it is built up-front, pointed at `about:blank` and hidden. Opening it the
-/// first time only navigates it, which is cheap and safe from any thread. The
-/// startup cost is one empty webview.
+/// `attach()` during `setup` works because the loop has not started. `attach()`
+/// on a `--multi-window` clone also works, when called from the same worker
+/// thread that built the window (measured 2026-09-05 02:56: `pake-1` got
+/// sidebar+wiki+About). Do not move `add_child` into `run_on_main_thread`.
+///
+/// So the wiki is built up-front, pointed at `about:blank` and hidden. Opening
+/// it the first time only navigates it, which is cheap and safe from any thread.
 ///
 /// # Why a webview rather than an iframe
 ///

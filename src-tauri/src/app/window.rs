@@ -98,7 +98,15 @@ pub fn set_window(
 pub fn open_additional_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let state = app.state::<MultiWindowState>();
     let label = state.next_window_label();
-    build_window_with_label(app, &state.pake_config, &state.tauri_config, &label)
+    let window = build_window_with_label(app, &state.pake_config, &state.tauri_config, &label)?;
+    // Same attach as the first window. Per-window SidebarState keys off this
+    // label, so collapsing or opening the wiki here must not move the others.
+    // Called from a worker thread (not run_on_main_thread) so add_child is not
+    // trap 3. If it ever hangs, gbf_new_window's timeout is the measurement.
+    if let Err(error) = crate::app::sidebar::attach(&window) {
+        eprintln!("[Pake][gbf] failed to attach the native sidebar to '{label}': {error}");
+    }
+    Ok(window)
 }
 
 #[cfg(target_os = "windows")]
