@@ -229,6 +229,12 @@ struct WindowFlags {
     hug_busy: bool,
     /// GBF Automatic Resizing (`mobage_fixwindowsize === 0`).
     automatic: bool,
+    /// Exactly one hug is owed after a fixed Size -> Automatic switch, to
+    /// close the dead strip the switch leaves. Nothing else hugs under
+    /// Automatic. Consumed by `maybe_hug_window`.
+    auto_switch_hug_due: bool,
+    /// Cancels a pending switch hug if the Size changes again first.
+    auto_switch_gen: u64,
     /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
     hug_gen: u64,
     /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
@@ -398,8 +404,39 @@ impl SidebarState {
 
     pub fn set_automatic(&self, label: &str, on: bool) {
         self.update(label, |f| {
+            if f.automatic != on {
+                // Any pending switch hug belongs to the mode we are leaving.
+                f.auto_switch_hug_due = false;
+                f.auto_switch_gen = f.auto_switch_gen.wrapping_add(1);
+            }
             f.automatic = on;
         });
+    }
+
+    fn bump_auto_switch_gen(&self, label: &str) -> u64 {
+        let mut out = 0;
+        self.update(label, |f| {
+            f.auto_switch_gen = f.auto_switch_gen.wrapping_add(1);
+            out = f.auto_switch_gen;
+        });
+        out
+    }
+
+    fn auto_switch_gen(&self, label: &str) -> u64 {
+        self.with(label, |f| f.auto_switch_gen)
+    }
+
+    fn set_auto_switch_hug_due(&self, label: &str, on: bool) {
+        self.update(label, |f| f.auto_switch_hug_due = on);
+    }
+
+    fn take_auto_switch_hug_due(&self, label: &str) -> bool {
+        let mut out = false;
+        self.update(label, |f| {
+            out = f.auto_switch_hug_due;
+            f.auto_switch_hug_due = false;
+        });
+        out
     }
 
     pub fn bump_hug_gen(&self, label: &str) -> u64 {
@@ -737,12 +774,15 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if state.hug_busy(&label) {
         return Ok(false);
     }
-    // Automatic: the window belongs to the player and we never resize it.
-    // Measured why: from a 2184 drag (zoom 2, wrap 640) the cap hug pulled the
-    // window to 997, GBF re-fitted to wrap 388, and the gap re-opened at 284px
-    // -- with the game smaller than before the hug. Any resize we make under
-    // Automatic sends GBF re-fitting, so the only stable move is none.
-    if state.is_automatic(&label) {
+    // Automatic: the window belongs to the player. The single exception is
+    // the hug owed by a fixed Size -> Automatic switch, which closes the dead
+    // strip that switch leaves (measured 285px going Large -> Full).
+    //
+    // Nothing else hugs here. A cap hug on a user drag was tried and removed:
+    // from a 2184 drag (zoom 2, wrap 640) it pulled the window to 997, GBF
+    // re-fitted to wrap 388, and the gap re-opened at 284px with the game
+    // smaller than before.
+    if state.is_automatic(&label) && !state.take_auto_switch_hug_due(&label) {
         return Ok(false);
     }
     let _ = state.take_panel_hug_due(&label);
@@ -771,6 +811,59 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
         return Err(e);
     }
     Ok(true)
+}
+
+/// Fixed Size -> Automatic leaves a dead strip: the window keeps the fixed
+/// size's width while GBF drops to whatever it fits at (measured Large -> Full:
+/// window 997, wrap 388, 285px of nothing right of the sidebar). Wait for
+/// #wrapper to stop moving, then hug the right edge to the sidebar exactly
+/// once. GBF may re-fit smaller after that hug; we do not chase it, because
+/// chasing is the walk-down this suite exists to prevent.
+fn schedule_switch_to_automatic_hug(app: &AppHandle, label: &str) {
+    let gen = app.state::<SidebarState>().bump_auto_switch_gen(label);
+    let app = app.clone();
+    let label = label.to_string();
+    std::thread::spawn(move || {
+        let mut last = -1.0_f64;
+        let mut stable: u32 = 0;
+        for _ in 0..25 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let state = app.state::<SidebarState>();
+            if state.auto_switch_gen(&label) != gen {
+                return;
+            }
+            if !state.is_locked(&label) || !state.is_automatic(&label) {
+                return;
+            }
+            let edge = state.game_edge(&label);
+            if edge > 1.0 && (edge - last).abs() < 20.0 {
+                stable += 1;
+            } else {
+                stable = 0;
+            }
+            last = edge;
+            if stable >= 5 {
+                break;
+            }
+        }
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = app_main.state::<SidebarState>();
+            if state.auto_switch_gen(&label) != gen {
+                return;
+            }
+            if !state.is_locked(&label) || !state.is_automatic(&label) {
+                return;
+            }
+            state.set_auto_switch_hug_due(&label, true);
+            if let Some(host) = app_main.get_window(&label) {
+                let _ = layout(&host);
+            }
+            // One shot: if layout did not spend it, drop it so a later
+            // relayout cannot hug behind the player's back.
+            state.set_auto_switch_hug_due(&label, false);
+        });
+    });
 }
 
 /// Granblue switched to Automatic. Panels are unavailable there, so shut any
@@ -2283,6 +2376,7 @@ pub fn gbf_game_edge(
                 state.note_game_size_change(&win_label, prev_edge, pending_right, true);
                 if !prev_auto {
                     close_panels_for_automatic(&app, &win_label);
+                    schedule_switch_to_automatic_hug(&app, &win_label);
                 }
                 if let Some(host) = app.get_window(&win_label) {
                     let _ = layout(&host);
@@ -2306,6 +2400,7 @@ pub fn gbf_game_edge(
     state.note_game_size_change(&label, current_edge, right, automatic);
     if automatic && !prev_auto {
         close_panels_for_automatic(&app, &label);
+        schedule_switch_to_automatic_hug(&app, &label);
     }
     if dpr_first || overlay_changed {
         // Automatic lock: leftover is grow room until GBF hits its cap.
