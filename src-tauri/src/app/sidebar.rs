@@ -233,15 +233,6 @@ struct WindowFlags {
     hug_gen: u64,
     /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
     edge_apply_gen: u64,
-    /// Layout may hug an Automatic window (set after the settle timer).
-    auto_hug_due: bool,
-    /// Automatic: one hug per user resize. Stops the walk-down after a snap.
-    auto_hug_allowed: bool,
-    /// Physical inner width of the last Automatic hug, to ignore its Resized echo.
-    last_hug_phys_w: u32,
-    /// Last user width-drag under Automatic lock. Leftover hug waits so GBF
-    /// can grow instead of snapping the drag back (recording 115347).
-    last_auto_resize: Option<std::time::Instant>,
     /// Locked + Automatic: do not shrink the game webview below this. The OS
     /// window may hug; Granblue's viewport must not.
     game_keep_w: f64,
@@ -407,14 +398,6 @@ impl SidebarState {
 
     pub fn set_automatic(&self, label: &str, on: bool) {
         self.update(label, |f| {
-            if f.automatic != on {
-                // Switching Size <-> Full does nothing to the window. We no
-                // longer try to carry a fixed size across the change: GBF
-                // settles at its own natural size and the player drags from
-                // there. Clear both tokens so no hug fires on the transition.
-                f.auto_hug_allowed = false;
-                f.auto_hug_due = false;
-            }
             f.automatic = on;
         });
     }
@@ -445,56 +428,15 @@ impl SidebarState {
         self.with(label, |f| f.edge_apply_gen)
     }
 
-    pub fn set_auto_hug_due(&self, label: &str, on: bool) {
-        self.update(label, |f| f.auto_hug_due = on);
-    }
-
-    pub fn take_auto_hug_due(&self, label: &str) -> bool {
-        let mut out = false;
-        self.update(label, |f| {
-            out = f.auto_hug_due;
-            f.auto_hug_due = false;
-        });
-        out
-    }
-
-    pub fn auto_hug_allowed(&self, label: &str) -> bool {
-        self.with(label, |f| f.auto_hug_allowed)
-    }
-
-    pub fn set_auto_hug_allowed(&self, label: &str, on: bool) {
-        self.update(label, |f| f.auto_hug_allowed = on);
-    }
-
-    pub fn last_auto_resize_recent(&self, label: &str, within: std::time::Duration) -> bool {
-        self.with(label, |f| {
-            f.last_auto_resize
-                .map(|t| t.elapsed() < within)
-                .unwrap_or(false)
-        })
-    }
-
     /// A fixed Size wrap change hugs immediately. Under Automatic nothing
-    /// is scheduled: the window is the player's, and only their own width
-    /// drag may hug (once, at GBF's cap).
+    /// happens at all: the window is the player's.
     pub fn note_game_size_change(&self, label: &str, prev_edge: f64, right: f64, now_auto: bool) {
         if !self.is_locked(label) {
-            return;
-        }
-        if self.last_auto_resize_recent(label, std::time::Duration::from_millis(2000)) {
             return;
         }
         if !now_auto && prev_edge > 1.0 && (prev_edge - right).abs() > 40.0 {
             self.set_panel_hug_due(label, true);
         }
-    }
-
-    pub fn last_hug_phys_w(&self, label: &str) -> u32 {
-        self.with(label, |f| f.last_hug_phys_w)
-    }
-
-    pub fn set_last_hug_phys_w(&self, label: &str, w: u32) {
-        self.update(label, |f| f.last_hug_phys_w = w);
     }
 
     pub fn game_keep_w(&self, label: &str) -> f64 {
@@ -568,24 +510,16 @@ impl SidebarState {
         out
     }
 
-    /// A user width-drag (not our own hug) may have one Automatic snap.
-    /// A drag while wiki/About is open means we must not restore the borrowed width.
-    pub fn arm_auto_hug_if_user_resize(&self, label: &str, phys_w: u32) {
+    /// A drag while a panel is open means we must not restore the borrowed
+    /// width. Nothing else: under Automatic a user drag arms no hug at all,
+    /// because any window resize we make sends GBF re-fitting smaller.
+    pub fn note_user_resize(&self, label: &str) {
         self.update(label, |f| {
             if f.hug_busy {
                 return;
             }
             if f.wiki_open || f.about_open || f.options_open {
                 f.panel_user_resized = true;
-            }
-            if !f.locked || !f.automatic {
-                return;
-            }
-            let last = f.last_hug_phys_w;
-            if last == 0 || phys_w.abs_diff(last) > 8 {
-                f.auto_hug_allowed = true;
-                f.game_zoom = 0.0;
-                f.last_auto_resize = Some(std::time::Instant::now());
             }
         });
     }
@@ -792,10 +726,8 @@ fn column_x(host: &Window, s: &Split) -> f64 {
 
 /// Locked: shrink/grow the OS window so its right edge sits on the sidebar.
 ///
-/// Fixed Window Size hugs immediately. Automatic waits for
-/// `schedule_automatic_hug` so a width drag can let GBF grow up to its cap
-/// first; leftover past that cap is then hugged away (the dead strip between
-/// game and sidebar).
+/// Fixed Window Size only. Under Automatic this is a no-op: see the comment
+/// in the body for the measurement that ruled the cap hug out.
 fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
@@ -805,28 +737,15 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if state.hug_busy(&label) {
         return Ok(false);
     }
-    let panel_due = state.take_panel_hug_due(&label);
-    if state.is_automatic(&label) && !panel_due {
-        // Don't spend the drag-hug token. Below Large, leftover is grow room.
-        // Wait 2s after a user drag, and require a real cap wrapper — reload
-        // flashes Large zoom while #wrapper is still small (recording 115347).
-        if state.game_zoom(&label) < 1.85
-            || state.game_edge(&label) < 500.0
-            || state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000))
-        {
-            return Ok(false);
-        }
-    }
+    // Automatic: the window belongs to the player and we never resize it.
+    // Measured why: from a 2184 drag (zoom 2, wrap 640) the cap hug pulled the
+    // window to 997, GBF re-fitted to wrap 388, and the gap re-opened at 284px
+    // -- with the game smaller than before the hug. Any resize we make under
+    // Automatic sends GBF re-fitting, so the only stable move is none.
     if state.is_automatic(&label) {
-        let auto_due = state.take_auto_hug_due(&label);
-        if !panel_due && !auto_due {
-            return Ok(false);
-        }
-        // One snap per user drag. A panel/sidebar hug does not spend that token.
-        if auto_due && !panel_due {
-            state.set_auto_hug_allowed(&label, false);
-        }
+        return Ok(false);
     }
+    let _ = state.take_panel_hug_due(&label);
     let scale = host.scale_factor()?;
     let phys = host.inner_size()?;
     let inner_w = phys.to_logical::<f64>(scale).width;
@@ -838,18 +757,7 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     // at Small was eating Options/About/wiki instead of growing the window.
     let want_bar = sidebar_want(state.is_collapsed(&label));
     let want_w = col + reserved_panel_w(&state, &label, s.wiki_w) + want_bar;
-    if state.is_automatic(&label) && !panel_due {
-        // Wrap 320 leftover is room for GBF to grow. Hugging it snaps a
-        // user width-drag back before Automatic can scale (recording 115347).
-        if state.game_zoom(&label) < 1.85 {
-            return Ok(false);
-        }
-        // Close leftover to the right of the sidebar only. Growing would
-        // fight a shrink, and a second shrink after GBF reflows is the walk-down.
-        if inner_w <= want_w + HUG_SLACK {
-            return Ok(false);
-        }
-    } else if (inner_w - want_w).abs() <= HUG_SLACK {
+    if (inner_w - want_w).abs() <= HUG_SLACK {
         return Ok(false);
     }
     let want_phys = (want_w * scale).round() as u32;
@@ -858,71 +766,11 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     }
     state.save_hug_width_once(&label, inner_w);
     state.set_hug_busy(&label, true);
-    if state.is_automatic(&label) {
-        state.set_last_hug_phys_w(&label, want_phys);
-    }
     if let Err(e) = host.set_size(PhysicalSize::new(want_phys, phys.height)) {
         state.set_hug_busy(&label, false);
-        if state.is_automatic(&label) {
-            state.set_auto_hug_allowed(&label, true);
-        }
         return Err(e);
     }
     Ok(true)
-}
-
-/// Leftover after a *user* width-drag, once GBF has hit its cap. Size/Full
-/// does not arm this (recording 125222).
-fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
-    let state = host.app_handle().state::<SidebarState>();
-    let label = host.label().to_string();
-    if !state.is_automatic(&label) || state.hug_busy(&label) {
-        return;
-    }
-    if !state.auto_hug_allowed(&label) {
-        return;
-    }
-    if snap_css(&state, &label) <= 1.0 {
-        return;
-    }
-    let Ok(scale) = host.scale_factor() else {
-        return;
-    };
-    let Ok(phys) = host.inner_size() else {
-        return;
-    };
-    let inner_w = phys.to_logical::<f64>(scale).width;
-    let want_w =
-        col + reserved_panel_w(&state, &label, s.wiki_w) + sidebar_want(state.is_collapsed(&label));
-    if inner_w <= want_w + HUG_SLACK {
-        return;
-    }
-    let gen = state.bump_hug_gen(&label);
-    let app = host.app_handle().clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(2200));
-        let state = app.state::<SidebarState>();
-        if state.hug_gen(&label) != gen || !state.is_locked(&label) {
-            return;
-        }
-        let app_main = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let state = app_main.state::<SidebarState>();
-            if state.hug_gen(&label) != gen {
-                return;
-            }
-            if state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000)) {
-                return;
-            }
-            if state.game_zoom(&label) < 1.85 || state.game_edge(&label) < 500.0 {
-                return;
-            }
-            state.set_auto_hug_due(&label, true);
-            if let Some(host) = app_main.get_window(&label) {
-                let _ = layout(&host);
-            }
-        });
-    });
 }
 
 /// Granblue switched to Automatic. Panels are unavailable there, so shut any
@@ -1053,9 +901,6 @@ fn fit_inner_width(host: &Window, want: f64, allow_shrink: bool) -> tauri::Resul
         return Ok(inner_w);
     }
     state.set_hug_busy(&label, true);
-    if state.is_automatic(&label) {
-        state.set_last_hug_phys_w(&label, want_phys);
-    }
     host.set_size(PhysicalSize::new(want_phys, phys.height))?;
     let after = host
         .inner_size()
@@ -1126,7 +971,6 @@ fn restore_panel_width(host: &Window) {
         let want_phys = (before * scale).round() as u32;
         if want_phys != 0 && want_phys != phys.width {
             state.set_hug_busy(&label, true);
-            state.set_last_hug_phys_w(&label, want_phys);
             let _ = host.set_size(PhysicalSize::new(want_phys, phys.height));
         }
     }
@@ -1328,11 +1172,9 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     } else if lock_fill && automatic {
         // Overlay. Never shrink Granblue's viewport because the OS frame hugged.
         if !state.hug_busy(&label) {
-            let last = state.last_hug_phys_w(&label);
-            let phys = host.inner_size()?.width;
-            if inner_w + HUG_SLACK < state.game_keep_w(&label)
-                && (last == 0 || phys.abs_diff(last) > 8)
-            {
+            // No Automatic hug exists any more, so every shrink here is the
+            // player's own drag -- there is no hug echo left to ignore.
+            if inner_w + HUG_SLACK < state.game_keep_w(&label) {
                 state.set_game_keep_w(&label, inner_w);
             } else {
                 state.raise_game_keep_w(&label, inner_w);
@@ -1462,7 +1304,6 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         }
     }
 
-    schedule_automatic_hug(host, col, &s);
     state.set_hug_busy(&label, false);
     Ok(out)
 }
@@ -1532,16 +1373,14 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     persist_layout_state(host.app_handle());
 
     // The game webview no longer follows the window on its own, so every resize
-    // has to re-run the split. A user width-drag (not our hug) arms one
-    // Automatic snap; GBF reflow after that snap must not arm another.
+    // has to re-run the split. Under Automatic a drag arms nothing: we never
+    // resize that window ourselves.
     let on_resize = host.clone();
     host.on_window_event(move |event| match event {
         WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
             let state = on_resize.app_handle().state::<SidebarState>();
             let label = on_resize.label().to_string();
-            if let Ok(phys) = on_resize.inner_size() {
-                state.arm_auto_hug_if_user_resize(&label, phys.width);
-            }
+            state.note_user_resize(&label);
             if let Err(error) = layout(&on_resize) {
                 eprintln!("[Pake][gbf] sidebar relayout failed: {error}");
             }
@@ -1668,18 +1507,16 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .app_handle()
         .state::<SidebarState>()
         .game_keep_w(window.label());
-    let hug_allowed = window
-        .app_handle()
-        .state::<SidebarState>()
-        .auto_hug_allowed(window.label());
     let hug_busy = window
         .app_handle()
         .state::<SidebarState>()
         .hug_busy(window.label());
-    let last_hug = window
+    // Last Game.getZoom() we were told about. Nothing acts on it any more --
+    // it is here so a probe can see what GBF settled on.
+    let game_zoom = window
         .app_handle()
         .state::<SidebarState>()
-        .last_hug_phys_w(window.label());
+        .game_zoom(window.label());
     let wiki_open = window
         .app_handle()
         .state::<SidebarState>()
@@ -1718,7 +1555,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let monitor = monitor_inner_ceiling(&window);
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nkeep={keep:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -2282,12 +2119,6 @@ fn set_lock(host: &Window, on: bool) -> String {
         .state::<SidebarState>()
         .set_locked(host.label(), on);
     if on {
-        host.app_handle()
-            .state::<SidebarState>()
-            .set_auto_hug_allowed(host.label(), true);
-        host.app_handle()
-            .state::<SidebarState>()
-            .set_last_hug_phys_w(host.label(), 0);
         host.app_handle()
             .state::<SidebarState>()
             .set_game_keep_w(host.label(), 0.0);
