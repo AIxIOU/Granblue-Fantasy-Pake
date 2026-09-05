@@ -999,8 +999,13 @@ fn restore_panel_width(host: &Window) {
         }
     }
     if automatic {
+        // Stale keep from the pre-wiki drag is wider than the hugged
+        // window and would paint the game over the sidebar.
+        state.set_game_keep_w(&label, 0.0);
+        state.set_auto_hug_allowed(&label, false);
         state.set_panel_hug_due(&label, true);
         let _ = layout(host);
+        schedule_panel_hug(host);
     } else {
         schedule_panel_hug(host);
     }
@@ -1152,7 +1157,9 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
 
     if maybe_hug_window(host, col, &s)? {
         out.push_str("hug: set_size issued\n");
-        return Ok(out);
+        // Keep going and place the chrome. Returning here left the sidebar
+        // at its pre-hug x, which is off the right edge of the smaller
+        // window (recording 113543: close wiki at Automatic cap).
     }
 
     let panel_min = if wiki_open {
@@ -1200,7 +1207,16 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                 state.raise_game_keep_w(&label, inner_w);
             }
         }
-        state.game_keep_w(&label).max(inner_w).max(1.0)
+        let overlay = state.game_keep_w(&label).max(inner_w).max(1.0);
+        // Overlay only while a user drag still has leftover for GBF to grow
+        // into. Once that hug is spent (or a panel just closed), tile to
+        // `#wrapper` so the sidebar is a sibling, not under the game
+        // (recording 113543).
+        if state.auto_hug_allowed(&label) {
+            overlay.min(inner_w).max(1.0)
+        } else {
+            col.max(1.0)
+        }
     } else if lock_fill {
         inner_w.max(1.0)
     } else if unlock_snap {
@@ -1307,6 +1323,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let e = bar.eval(format!(
                 "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside}}})"
             ));
+            let _ = bar.hide();
             let v = bar.show();
             out.push_str(&format!(
                 "bar pos={} size={} eval={} show={} now={}\n",
