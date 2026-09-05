@@ -301,12 +301,17 @@ pub fn run_app() {
             update_theme_mode,
             set_zoom,
             webview_navigate,
+            // EXPERIMENT ONLY -- native sidebar. Not on main.
+            app::sidebar::gbf_nav,
+            app::sidebar::gbf_toggle_sidebar,
+            app::sidebar::gbf_debug,
         ])
         .setup(move |app| {
             app.manage(MultiWindowState::new(
                 pake_config.clone(),
                 tauri_config.clone(),
             ));
+            app.manage(app::sidebar::SidebarState::default());
 
             // --- Menu Construction Start ---
             #[cfg(target_os = "macos")]
@@ -321,6 +326,13 @@ pub fn run_app() {
             // --- Menu Construction End ---
 
             let window = set_window(app.app_handle(), &pake_config, &tauri_config)?;
+            // EXPERIMENT ONLY: add the sidebar webview beside the game and
+            // narrow the game to fit. A failure here must not stop the app --
+            // without it you simply get the plain wrapper with no sidebar,
+            // which is still a usable client and a useful datapoint.
+            if let Err(error) = app::sidebar::attach(&window) {
+                eprintln!("[Pake][gbf] failed to attach the native sidebar: {error}");
+            }
             set_system_tray(
                 app.app_handle(),
                 show_system_tray,

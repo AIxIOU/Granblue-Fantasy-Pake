@@ -1,6 +1,6 @@
 {
-  "productName": "Weekly",
-  "identifier": "com.pake.weekly",
+  "productName": "GBF Pake NATIVE SIDEBAR EXPERIMENT",
+  "identifier": "com.gbf.pake.experiment.nativesidebar",
   "version": "3.15.7",
   "app": {
     "withGlobalTauri": true,

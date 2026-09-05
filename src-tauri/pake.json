@@ -1,13 +1,13 @@
 {
   "windows": [
     {
-      "url": "https://weekly.tw93.fun/en",
+      "url": "https://steam.granbluefantasy.com",
       "url_type": "web",
-      "hide_title_bar": true,
+      "hide_title_bar": false,
       "hide_window_decorations": false,
       "fullscreen": false,
-      "width": 1200,
-      "height": 780,
+      "width": 900,
+      "height": 820,
       "resizable": true,
       "always_on_top": false,
       "dark_mode": false,
@@ -22,7 +22,9 @@
       "force_internal_navigation": false,
       "internal_url_regex": "",
       "enable_find": false,
-      "new_window": false
+      "new_window": false,
+      "min_width": 700,
+      "min_height": 570
     }
   ],
   "user_agent": {

@@ -6,4 +6,6 @@ pub mod invoke;
 pub mod menu;
 pub mod navigation;
 pub mod setup;
+// EXPERIMENT ONLY -- native sidebar webview. Not on main.
+pub mod sidebar;
 pub mod window;

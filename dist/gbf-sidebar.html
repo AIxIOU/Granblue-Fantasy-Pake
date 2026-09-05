@@ -1,0 +1,243 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Granblue Sidebar</title>
+<!--
+  EXPERIMENT ONLY. The native sidebar's page.
+
+  This document is NOT part of Granblue's origin. It is bundled app content
+  served from tauri://localhost, rendered in its own webview beside the game.
+  Nothing here can see or touch the game's DOM, which is the entire point:
+  Rule 0 is enforced by the process boundary instead of by our own discipline.
+
+  Navigation goes out over IPC to Rust, which sets location.hash on the game
+  webview -- the same thing clicking Granblue's own menu does.
+-->
+<style>
+  :root {
+    --bg: #14171f;
+    --bg-hover: #1e2330;
+    --fg: #c9d1e0;
+    --fg-dim: #6b7688;
+    --accent: #7aa2f7;
+    --line: #232838;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif;
+    user-select: none; cursor: default;
+  }
+  body { display: flex; flex-direction: column; }
+
+  #top {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  #toggle {
+    width: 28px; height: 28px; flex: 0 0 auto;
+    display: grid; place-items: center;
+    background: none; border: 1px solid var(--line); border-radius: 6px;
+    color: var(--fg); font-size: 14px; cursor: pointer;
+  }
+  #toggle:hover { background: var(--bg-hover); border-color: var(--accent); }
+  #brand { font-weight: 600; letter-spacing: .3px; white-space: nowrap; }
+  #badge {
+    margin-left: auto; font-size: 9px; letter-spacing: .5px;
+    color: #0d1017; background: var(--accent);
+    padding: 2px 5px; border-radius: 3px; white-space: nowrap;
+  }
+
+  /* The only scrolling region. */
+  #nav { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 6px 0; }
+  #nav::-webkit-scrollbar { width: 8px; }
+  #nav::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+  .sec {
+    padding: 10px 12px 4px; font-size: 10px; letter-spacing: .8px;
+    color: var(--fg-dim); text-transform: uppercase; white-space: nowrap;
+  }
+  .btn {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; padding: 7px 12px;
+    background: none; border: 0; color: var(--fg);
+    font: inherit; text-align: left; cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { background: var(--bg-hover); color: #fff; }
+  .btn .ico { width: 18px; flex: 0 0 auto; text-align: center; font-size: 14px; }
+  .btn .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+  .btn .key { color: var(--fg-dim); font-size: 10px; }
+
+  #dbg {
+    position: fixed; left: 0; right: 0; bottom: 26px;
+    margin: 0; padding: 6px 8px; max-height: 46%; overflow: auto;
+    background: #0b0e14; color: #9ece6a; border-top: 1px solid var(--accent);
+    font: 10px/1.35 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+    word-break: break-all; display: none;
+  }
+  #dbg.on { display: block; }
+  #foot {
+    flex: 0 0 auto; border-top: 1px solid var(--line);
+    padding: 7px 12px; font-size: 10px; color: var(--fg-dim); white-space: nowrap;
+  }
+
+  /* Collapsed: icons only. Because this is a separate document, collapsing
+     changes nothing about the game's own layout -- Rust just makes the webview
+     narrower. On main this required a body inset and a density refit. */
+  body.collapsed #brand,
+  body.collapsed #badge,
+  body.collapsed .sec,
+  body.collapsed .btn .lbl,
+  body.collapsed .btn .key,
+  body.collapsed #foot { display: none; }
+  body.collapsed #top { justify-content: center; padding: 8px 0; }
+  body.collapsed .btn { justify-content: center; padding: 8px 0; }
+</style>
+
+<div id="top">
+  <button id="toggle" title="Collapse / expand (Alt+L)">&#9776;</button>
+  <span id="brand">Granblue</span>
+  <span id="badge">NATIVE</span>
+</div>
+<div id="nav"></div>
+<div id="foot">starting…</div>
+<pre id="dbg"></pre>
+
+<script>
+  // Mirrors the NAV table in gbf-scaler.js so the two builds are comparable.
+  var NAV = [
+    { section: "Navigation" },
+    { label: "Home",          hash: "#mypage",                   icon: "⌂", key: "1" },
+    { label: "Party",         hash: "#party/index/0/npc/0",      icon: "⚔", key: "P" },
+    { label: "Quests",        hash: "#quest",                    icon: "☷", key: "2" },
+    { label: "Raids",         hash: "#quest/assist",             icon: "☠", key: "3" },
+    { label: "Co-op",         hash: "#coopraid",                 icon: "⇄", key: "4" },
+    { label: "Crew",          hash: "#guild",                    icon: "⚑", key: "5" },
+
+    { section: "Management" },
+    { label: "Supplies",      hash: "#item",                     icon: "◈", key: "6" },
+    { label: "Inventory",     hash: "#list",                     icon: "≡", key: "7" },
+    { label: "Crate",         hash: "#present",                  icon: "▣", key: "C" },
+    { label: "Stash",         hash: "#container",                icon: "⚿", key: "S" },
+    { label: "Profile",       hash: "#profile",                  icon: "☺", key: "8" },
+
+    { section: "More" },
+    { label: "Shop",          hash: "#shop",                     icon: "⛁", key: "9" },
+    { label: "Journey Drops", hash: "#shop/exchange/trajectory", icon: "✨", key: "0" },
+    { label: "Arcarum",       hash: "#arcarum",                  icon: "☆", key: "-" },
+    { label: "Alchemy Lab",   hash: "#frontier/alchemy/top",     icon: "⚗", key: "=" },
+    { label: "Trial Battles", hash: "#trial_battle",             icon: "⚔", key: "[" },
+    { label: "Casino",        hash: "#casino",                   icon: "♠", key: "]" },
+    { label: "Gacha",         hash: "#gacha",                    icon: "❈", key: ";" }
+  ];
+
+  // This webview is not exposed as a CDP target, so its console cannot be read
+  // from outside. Diagnostics go on screen instead, into the footer.
+  function say(msg) {
+    var f = document.getElementById("foot");
+    if (f) f.textContent = String(msg).slice(0, 120);
+  }
+
+  function invoke(cmd, args) {
+    var t = window.__TAURI__;
+    if (!t) return Promise.reject(new Error("no __TAURI__"));
+    if (!t.core || !t.core.invoke) {
+      return Promise.reject(new Error("__TAURI__ keys: " + Object.keys(t).join(",")));
+    }
+    return t.core.invoke(cmd, args);
+  }
+
+  window.addEventListener("error", function (e) {
+    say("js error: " + e.message);
+  });
+
+  function dump(text) {
+    var d = document.getElementById("dbg");
+    if (!d) return;
+    d.textContent = String(text);
+    d.className = "on";
+  }
+
+  function refreshDebug() {
+    invoke("gbf_debug")
+      .then(dump)
+      .catch(function (e) { dump("gbf_debug FAILED: " + (e && e.message ? e.message : e)); });
+  }
+
+  (function reportIpc() {
+    var t = window.__TAURI__;
+    if (!t) { say("NO __TAURI__ global"); return; }
+    if (!t.core || !t.core.invoke) { say("__TAURI__: " + Object.keys(t).join(",")); return; }
+    say("ipc ready");
+    refreshDebug();
+  })();
+
+  var nav = document.getElementById("nav");
+  NAV.forEach(function (item) {
+    if (item.section) {
+      var s = document.createElement("div");
+      s.className = "sec";
+      s.textContent = item.section;
+      nav.appendChild(s);
+      return;
+    }
+    var b = document.createElement("button");
+    b.className = "btn";
+    b.title = item.label;
+
+    var ico = document.createElement("span");
+    ico.className = "ico";
+    ico.textContent = item.icon;
+    var lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = item.label;
+    var key = document.createElement("span");
+    key.className = "key";
+    key.textContent = item.key || "";
+    b.appendChild(ico);
+    b.appendChild(lbl);
+    b.appendChild(key);
+
+    b.addEventListener("click", function () {
+      say("nav " + item.label + "…");
+      invoke("gbf_nav", { hash: item.hash })
+        .then(function () { say("nav ok: " + item.label); })
+        .catch(function (e) { say("nav FAILED: " + (e && e.message ? e.message : e)); });
+    });
+    nav.appendChild(b);
+  });
+
+  document.getElementById("toggle").addEventListener("click", function () {
+    say("toggle…");
+    invoke("gbf_toggle_sidebar")
+      .then(function (c) { say("toggle ok"); dump(c); })
+      .catch(function (e) { say("toggle FAILED: " + (e && e.message ? e.message : e)); });
+  });
+
+  // Rust owns the collapsed flag and pushes it here after every relayout, so
+  // there is only ever one source of truth for it.
+  window.__gbfSidebar = {
+    setCollapsed: function (on) {
+      document.body.classList.toggle("collapsed", !!on);
+    }
+  };
+
+  // Shortcuts work while the sidebar has focus. Focus routing across two
+  // webviews is a known open question for this experiment -- see the README.
+  document.addEventListener("keydown", function (e) {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === "l" || e.key === "L") {
+      e.preventDefault();
+      invoke("gbf_toggle_sidebar").catch(function () {});
+      return;
+    }
+    var hit = null;
+    NAV.forEach(function (n) {
+      if (n.key && n.key.toLowerCase() === String(e.key).toLowerCase()) hit = n;
+    });
+    if (hit) {
+      e.preventDefault();
+      invoke("gbf_nav", { hash: hit.hash }).catch(function () {});
+    }
+  });
+</script>
