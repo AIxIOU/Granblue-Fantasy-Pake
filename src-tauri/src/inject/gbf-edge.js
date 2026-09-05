@@ -1,6 +1,5 @@
-// EXPERIMENT ONLY. Read Granblue's #wrapper right edge so Rust can snap the
-// native sidebar to it. Rule 0: this only *reads* geometry. It does not write
-// to the game's document (locked-mode CSS is a separate, existing exception).
+// EXPERIMENT ONLY. Read Granblue's #wrapper and submenu overlay so Rust can
+// snap the native sidebar. Rule 0: this only *reads* geometry.
 (function () {
   if (window.__gbfEdgeInit) return;
   window.__gbfEdgeInit = true;
@@ -15,26 +14,53 @@
     }
   }
 
+  function consider(el, best) {
+    if (!el) return best;
+    var r = el.getBoundingClientRect();
+    var cs = window.getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") return best;
+    if (r.height < 40 || r.width < 8) return best;
+    return r.right > best ? r.right : best;
+  }
+
+  // Collapsed: #cnt-submenu-navi-vertical (icon rail).
+  // Expanded: #prt-submenu-contents / #chat-body (chat panel).
+  function overlayRight() {
+    var best = 0;
+    best = consider(document.getElementById("cnt-submenu-navi-vertical"), best);
+    best = consider(document.getElementById("prt-submenu-contents"), best);
+    best = consider(document.getElementById("chat-body"), best);
+    return best;
+  }
+
   window.__gbfReportEdge = function () {
     var t = window.__TAURI__;
     if (!t || !t.core || !t.core.invoke) return;
     var el = document.getElementById("wrapper");
     if (!el) {
-      // Steam login and other non-game pages. Clear the stale lock edge so
-      // the sidebar cannot sit on top of them.
-      t.core.invoke("gbf_game_edge", { right: 0, automatic: false, dpr: 0 });
+      t.core.invoke("gbf_game_edge", {
+        right: 0,
+        overlay: 0,
+        automatic: false,
+        dpr: 0,
+      });
       return;
     }
     var r = el.getBoundingClientRect();
     if (r.width <= 0) {
-      t.core.invoke("gbf_game_edge", { right: 0, automatic: false, dpr: 0 });
+      t.core.invoke("gbf_game_edge", {
+        right: 0,
+        overlay: 0,
+        automatic: false,
+        dpr: 0,
+      });
       return;
     }
-    if (!window.__gbfHug) return;
     var auto = automatic();
     if (auto === null) return;
     t.core.invoke("gbf_game_edge", {
       right: r.right,
+      overlay: overlayRight(),
       automatic: auto,
       dpr: window.devicePixelRatio || 1,
     });
@@ -43,7 +69,6 @@
   window.__gbfSetHug = function (on) {
     window.__gbfHug = !!on;
     window.__gbfReportEdge();
-    if (!on) return;
     var n = 0;
     var id = setInterval(function () {
       n += 1;
@@ -64,10 +89,27 @@
   try {
     var ro = new ResizeObserver(schedule);
     function attach() {
-      var el = document.getElementById("wrapper");
-      if (el) ro.observe(el);
+      ["wrapper", "submenu", "cnt-submenu-navi-vertical", "prt-submenu-contents", "chat-body"].forEach(
+        function (id) {
+          var el = document.getElementById(id);
+          if (el) ro.observe(el);
+        },
+      );
     }
     attach();
     document.addEventListener("DOMContentLoaded", attach);
+    document.addEventListener("hashchange", function () {
+      setTimeout(attach, 50);
+      schedule();
+    });
+  } catch (e) {}
+  try {
+    var mo = new MutationObserver(schedule);
+    function watchSub() {
+      var sub = document.getElementById("submenu");
+      if (sub) mo.observe(sub, { attributes: true, childList: true, subtree: true });
+    }
+    watchSub();
+    document.addEventListener("DOMContentLoaded", watchSub);
   } catch (e) {}
 })();
