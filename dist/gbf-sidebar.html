@@ -150,10 +150,9 @@
     { label: "Gacha",         hash: "#gacha",                    icon: "❈", key: ";" },
 
     { section: "Layout" },
-    // Rule 0 exception 2: hides Granblue's own chat column with CSS display,
-    // nothing detached, instantly reversible. Opening the wiki turns this on
-    // automatically so the panel uses that space instead of the game's.
-    { label: "Lock chat column", cmd: "gbf_toggle_lock", id: "nav-lock", icon: "▤", key: "L" },
+    // Matches main: hide the chat column (exception 2) and snap the sidebar's
+    // left edge to #wrapper's right edge. Alt+L.
+    { label: "Lock to game", cmd: "gbf_toggle_lock", id: "nav-lock", icon: "🔒", key: "L" },
 
     { section: "Reference" },
     // Not a Granblue hash. Opens the wiki, which is its own webview pointed

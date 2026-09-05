@@ -527,7 +527,9 @@ fn build_window(
         .initialization_script(include_str!("../inject/custom.js"))
         // EXPERIMENT: Alt shortcuts in the game webview (also attached to
         // wiki/about child webviews in sidebar.rs). Not on main.
-        .initialization_script(include_str!("../inject/gbf-keys.js"));
+        .initialization_script(include_str!("../inject/gbf-keys.js"))
+        // EXPERIMENT: read #wrapper's right edge (Rule 0: geometry only).
+        .initialization_script(include_str!("../inject/gbf-edge.js"));
 
     #[cfg(target_os = "windows")]
     let mut windows_browser_args = String::from("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-blink-features=AutomationControlled");
