@@ -213,6 +213,8 @@ struct WindowFlags {
     /// devicePixelRatio of the game webview. CSS px × this / window scale
     /// is window logical px. 0 = not yet reported.
     game_dpr: f64,
+    /// Last Game.getZoom() from the game webview. 0 = unknown.
+    game_zoom: f64,
     /// Inner width to restore when unlocking, after a lock hug. 0 = none.
     hug_saved_w: f64,
     /// True between our set_size and the Resized layout that follows it.
@@ -221,12 +223,17 @@ struct WindowFlags {
     automatic: bool,
     /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
     hug_gen: u64,
+    /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
+    edge_apply_gen: u64,
     /// Layout may hug an Automatic window (set after the settle timer).
     auto_hug_due: bool,
     /// Automatic: one hug per user resize. Stops the walk-down after a snap.
     auto_hug_allowed: bool,
     /// Physical inner width of the last Automatic hug, to ignore its Resized echo.
     last_hug_phys_w: u32,
+    /// Last user width-drag under Automatic lock. Leftover hug waits so GBF
+    /// can grow instead of snapping the drag back (recording 115347).
+    last_auto_resize: Option<std::time::Instant>,
     /// Locked + Automatic: do not shrink the game webview below this. The OS
     /// window may hug; Granblue's viewport must not.
     game_keep_w: f64,
@@ -378,6 +385,14 @@ impl SidebarState {
         self.update(label, |f| f.game_dpr = dpr);
     }
 
+    pub fn game_zoom(&self, label: &str) -> f64 {
+        self.with(label, |f| f.game_zoom)
+    }
+
+    pub fn set_game_zoom(&self, label: &str, zoom: f64) {
+        self.update(label, |f| f.game_zoom = zoom);
+    }
+
     pub fn is_automatic(&self, label: &str) -> bool {
         self.with(label, |f| f.automatic)
     }
@@ -399,6 +414,19 @@ impl SidebarState {
         self.with(label, |f| f.hug_gen)
     }
 
+    pub fn bump_edge_apply_gen(&self, label: &str) -> u64 {
+        let mut out = 0;
+        self.update(label, |f| {
+            f.edge_apply_gen = f.edge_apply_gen.wrapping_add(1);
+            out = f.edge_apply_gen;
+        });
+        out
+    }
+
+    pub fn edge_apply_gen(&self, label: &str) -> u64 {
+        self.with(label, |f| f.edge_apply_gen)
+    }
+
     pub fn set_auto_hug_due(&self, label: &str, on: bool) {
         self.update(label, |f| f.auto_hug_due = on);
     }
@@ -418,6 +446,14 @@ impl SidebarState {
 
     pub fn set_auto_hug_allowed(&self, label: &str, on: bool) {
         self.update(label, |f| f.auto_hug_allowed = on);
+    }
+
+    pub fn last_auto_resize_recent(&self, label: &str, within: std::time::Duration) -> bool {
+        self.with(label, |f| {
+            f.last_auto_resize
+                .map(|t| t.elapsed() < within)
+                .unwrap_or(false)
+        })
     }
 
     pub fn last_hug_phys_w(&self, label: &str) -> u32 {
@@ -515,6 +551,8 @@ impl SidebarState {
             let last = f.last_hug_phys_w;
             if last == 0 || phys_w.abs_diff(last) > 8 {
                 f.auto_hug_allowed = true;
+                f.game_zoom = 0.0;
+                f.last_auto_resize = Some(std::time::Instant::now());
             }
         });
     }
@@ -711,6 +749,17 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
         return Ok(false);
     }
     let panel_due = state.take_panel_hug_due(&label);
+    if state.is_automatic(&label) && !panel_due {
+        // Don't spend the drag-hug token. Below Large, leftover is grow room.
+        // Wait 2s after a user drag, and require a real cap wrapper — reload
+        // flashes Large zoom while #wrapper is still small (recording 115347).
+        if state.game_zoom(&label) < 1.85
+            || state.game_edge(&label) < 500.0
+            || state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000))
+        {
+            return Ok(false);
+        }
+    }
     if state.is_automatic(&label) {
         let auto_due = state.take_auto_hug_due(&label);
         if !panel_due && !auto_due {
@@ -733,6 +782,11 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     let want_bar = sidebar_want(state.is_collapsed(&label));
     let want_w = col + reserved_panel_w(&state, &label, s.wiki_w) + want_bar;
     if state.is_automatic(&label) && !panel_due {
+        // Wrap 320 leftover is room for GBF to grow. Hugging it snaps a
+        // user width-drag back before Automatic can scale (recording 115347).
+        if state.game_zoom(&label) < 1.85 {
+            return Ok(false);
+        }
         // Close leftover to the right of the sidebar only. Growing would
         // fight a shrink, and a second shrink after GBF reflows is the walk-down.
         if inner_w <= want_w + HUG_SLACK {
@@ -788,7 +842,7 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
     let gen = state.bump_hug_gen(&label);
     let app = host.app_handle().clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(700));
+        std::thread::sleep(std::time::Duration::from_millis(2200));
         let state = app.state::<SidebarState>();
         if state.hug_gen(&label) != gen || !state.is_locked(&label) {
             return;
@@ -797,6 +851,12 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
         let _ = app.run_on_main_thread(move || {
             let state = app_main.state::<SidebarState>();
             if state.hug_gen(&label) != gen {
+                return;
+            }
+            if state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000)) {
+                return;
+            }
+            if state.game_zoom(&label) < 1.85 || state.game_edge(&label) < 500.0 {
                 return;
             }
             state.set_auto_hug_due(&label, true);
@@ -1002,7 +1062,6 @@ fn restore_panel_width(host: &Window) {
         // Stale keep from the pre-wiki drag is wider than the hugged
         // window and would paint the game over the sidebar.
         state.set_game_keep_w(&label, 0.0);
-        state.set_auto_hug_allowed(&label, false);
         state.set_panel_hug_due(&label, true);
         let _ = layout(host);
         schedule_panel_hug(host);
@@ -1208,15 +1267,10 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             }
         }
         let overlay = state.game_keep_w(&label).max(inner_w).max(1.0);
-        // Overlay only while a user drag still has leftover for GBF to grow
-        // into. Once that hug is spent (or a panel just closed), tile to
-        // `#wrapper` so the sidebar is a sibling, not under the game
-        // (recording 113543).
-        if state.auto_hug_allowed(&label) {
-            overlay.min(inner_w).max(1.0)
-        } else {
-            col.max(1.0)
-        }
+        // Fill the window so a width-drag is not a hole of unpainted client
+        // (recording 115347). Cap at inner_w so stale keep cannot cover the
+        // sidebar after wiki close (recording 113543).
+        overlay.min(inner_w).max(1.0)
     } else if lock_fill {
         inner_w.max(1.0)
     } else if unlock_snap {
@@ -2161,18 +2215,24 @@ pub fn gbf_game_edge(
     automatic: bool,
     dpr: Option<f64>,
     overlay: Option<f64>,
+    zoom: Option<f64>,
 ) -> Result<(), String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
     let state = app.state::<SidebarState>();
     let dpr = dpr.filter(|v| *v > 0.05).unwrap_or(0.0);
     let overlay = overlay.unwrap_or(0.0);
+    let zoom = zoom.filter(|v| *v > 0.05).unwrap_or(0.0);
     if right <= 1.0 {
         // Reload removes #wrapper for a moment. Keep the last edge instead
         // of snapping the sidebar to x=0 / tiling the game to Small.
+        // Drop zoom so leftover hug cannot use a stale Large zoom.
+        state.set_game_zoom(&label, 0.0);
+        state.bump_edge_apply_gen(&label);
         return Ok(());
     }
-    let same_edge = (state.game_edge(&label) - right).abs() < 0.5;
+    let current_edge = state.game_edge(&label);
+    let same_edge = (current_edge - right).abs() < 0.5;
     let same_overlay = (state.game_overlay(&label) - overlay).abs() < 0.5;
     let same_dpr = dpr <= 0.05 || (state.game_dpr(&label) - dpr).abs() < 0.01;
     let same_auto = state.is_automatic(&label) == automatic;
@@ -2182,13 +2242,59 @@ pub fn gbf_game_edge(
     if dpr > 0.05 {
         state.set_game_dpr(&label, dpr);
     }
+    let growing = automatic && current_edge > 1.0 && right > current_edge + 80.0;
+    let dropping = automatic && current_edge > 1.0 && right + 80.0 < current_edge;
+    if dropping {
+        state.bump_edge_apply_gen(&label);
+    }
+    if growing {
+        // Reload often paints Large #wrapper for a beat, then Automatic
+        // settles smaller. Wait; a drop cancels this. A held cap applies.
+        let gen = state.bump_edge_apply_gen(&label);
+        let pending_right = right;
+        let pending_zoom = zoom;
+        let pending_overlay = overlay;
+        let handle = app.clone();
+        let win_label = label.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            let app = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                let state = app.state::<SidebarState>();
+                if state.edge_apply_gen(&win_label) != gen {
+                    return;
+                }
+                if pending_zoom > 0.05 {
+                    state.set_game_zoom(&win_label, pending_zoom);
+                }
+                state.set_game_edge(&win_label, pending_right);
+                state.set_game_overlay(&win_label, pending_overlay);
+                if let Some(host) = app.get_window(&win_label) {
+                    let _ = layout(&host);
+                }
+            });
+        });
+        return Ok(());
+    }
+    if zoom > 0.05 {
+        if automatic && zoom >= 1.85 && right < 500.0 {
+            state.set_game_zoom(&label, 1.0);
+        } else {
+            state.set_game_zoom(&label, zoom);
+        }
+    }
     if same_edge && same_overlay && same_auto && same_dpr {
         return Ok(());
     }
     state.set_game_edge(&label, right);
     state.set_game_overlay(&label, overlay);
     if dpr_first || overlay_changed {
-        state.set_panel_hug_due(&label, true);
+        // Automatic lock: leftover is grow room until GBF hits its cap.
+        // Hugging on every overlay report snaps a width-drag back
+        // (recording 115347). Panel close sets this flag itself.
+        if !(automatic && state.is_locked(&label)) {
+            state.set_panel_hug_due(&label, true);
+        }
     }
     let handle = app.clone();
     let win_label = label;

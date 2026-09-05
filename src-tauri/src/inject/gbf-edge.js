@@ -42,19 +42,20 @@
     if (r.width <= 0) return;
     var auto = automatic();
     if (auto === null) return;
-    // Reload paints #wrapper at the unzoomed 320px base before GBF applies
-    // container zoom. Reporting that walks the sidebar into the game and,
-    // under Automatic, tiles the webview to Small so the zoom never recovers.
+    // Reload paints #wrapper at the unzoomed 320px base before zoom lands.
+    // Only skip that 320px flash, not Automatic sizes between Small and Large
+    // (320*zoom would ignore wrap 388 while getZoom is still 2).
     var zoom = 1;
     try {
       if (typeof Game.getZoom === "function") zoom = Game.getZoom() || 1;
     } catch (e) {}
-    if (r.right + 24 < 320 * zoom) return;
+    if (zoom > 1.05 && r.right < 340) return;
     t.core.invoke("gbf_game_edge", {
       right: r.right,
       overlay: overlayRight(),
       automatic: auto,
       dpr: window.devicePixelRatio || 1,
+      zoom: zoom,
     });
   };
 
