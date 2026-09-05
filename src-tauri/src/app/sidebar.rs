@@ -207,6 +207,9 @@ struct WindowFlags {
     collapsed_for_panel: bool,
     /// #wrapper's right edge in the game webview, CSS pixels. 0 = unknown.
     game_edge: f64,
+    /// devicePixelRatio of the game webview. CSS px × this / window scale
+    /// is window logical px. 0 = not yet reported.
+    game_dpr: f64,
     /// Inner width to restore when unlocking, after a lock hug. 0 = none.
     hug_saved_w: f64,
     /// True between our set_size and the Resized layout that follows it.
@@ -354,6 +357,14 @@ impl SidebarState {
 
     pub fn set_game_edge(&self, label: &str, right: f64) {
         self.update(label, |f| f.game_edge = right);
+    }
+
+    pub fn game_dpr(&self, label: &str) -> f64 {
+        self.with(label, |f| f.game_dpr)
+    }
+
+    pub fn set_game_dpr(&self, label: &str, dpr: f64) {
+        self.update(label, |f| f.game_dpr = dpr);
     }
 
     pub fn is_automatic(&self, label: &str) -> bool {
@@ -637,6 +648,17 @@ fn split(
 /// Ignore leftover smaller than this when hugging (rounding / DPI).
 const HUG_SLACK: f64 = 8.0;
 
+/// CSS pixels in the game webview → window logical pixels.
+///
+/// WebView2's `devicePixelRatio` is not the OS window `scale_factor`. Treating
+/// `#wrapper.right` as logical placed the sidebar ~14px into the game
+/// (measured 2026-09-05: dpr 1.126, scale 1.104, wrapper 640 → 653 logical).
+fn css_to_window_logical(host: &Window, css: f64, dpr: f64) -> f64 {
+    let scale = host.scale_factor().unwrap_or(1.0).max(0.05);
+    let dpr = if dpr > 0.05 { dpr } else { 1.0 };
+    css * dpr / scale
+}
+
 /// X origin of the wiki/About + sidebar column.
 ///
 /// Unlocked, that is the tiled split (`game_w`). Locked, it is `#wrapper`'s
@@ -648,10 +670,11 @@ fn column_x(host: &Window, s: &Split) -> f64 {
     if !state.is_locked(label) {
         return s.game_w;
     }
-    let edge = state.game_edge(label);
-    if edge <= 1.0 {
+    let css = state.game_edge(label);
+    if css <= 1.0 {
         return s.game_w;
     }
+    let edge = css_to_window_logical(host, css, state.game_dpr(label));
     let inner_w = host
         .inner_size()
         .ok()
@@ -681,7 +704,7 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
         if !panel_due && !auto_due {
             return Ok(false);
         }
-        // One snap per user drag. A panel open/close hug does not spend that token.
+        // One snap per user drag. A panel/sidebar hug does not spend that token.
         if auto_due && !panel_due {
             state.set_auto_hug_allowed(&label, false);
         }
@@ -689,8 +712,12 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     let scale = host.scale_factor()?;
     let phys = host.inner_size()?;
     let inner_w = phys.to_logical::<f64>(scale).width;
-    let want_w = col + s.wiki_w + s.sidebar_w;
-    if state.is_automatic(&label) {
+    // Prefer the rail we asked for, not the squeezed leftover. After collapse
+    // the window is too narrow for 250, so split() reports ~52–59 and a hug
+    // to that width is a no-op — expand would never grow back.
+    let want_bar = sidebar_want(state.is_collapsed(&label));
+    let want_w = col + s.wiki_w + want_bar;
+    if state.is_automatic(&label) && !panel_due {
         // Close leftover to the right of the sidebar only. Growing would
         // fight a shrink, and a second shrink after GBF reflows is the walk-down.
         if inner_w <= want_w + HUG_SLACK {
@@ -1384,7 +1411,25 @@ pub fn gbf_toggle_sidebar(window: Window) -> Result<String, String> {
     app.run_on_main_thread(move || {
         // get_window, NOT get_webview_window -- see the module docs.
         let report = match handle.get_window(&label) {
-            Some(host) => layout_verbose(&host),
+            Some(host) => {
+                let state = handle.state::<SidebarState>();
+                if state.is_locked(&label) {
+                    // Overlay: hug to the new rail width. Collapse must reclaim
+                    // the expanded sidebar's leftover even when Automatic has
+                    // already spent its user-drag hug token.
+                    state.set_panel_hug_due(&label, true);
+                } else {
+                    // Tiled: keep the game column, grow/shrink the OS window
+                    // by the rail delta so Automatic leftover is removed
+                    // instead of left as empty window.
+                    let delta = sidebar_want(collapsed) - sidebar_want(!collapsed);
+                    if let (Ok(scale), Ok(phys)) = (host.scale_factor(), host.inner_size()) {
+                        let inner = phys.to_logical::<f64>(scale).width;
+                        let _ = fit_inner_width(&host, inner + delta, true);
+                    }
+                }
+                layout_verbose(&host)
+            }
             None => format!("get_window({label}) -> None"),
         };
         let _ = tx.send(report);
@@ -1434,6 +1479,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let wiki_outside = window.app_handle().state::<SidebarState>().is_wiki_outside(window.label());
     let tray = window.app_handle().state::<SidebarState>().is_tray_enabled();
     let tray_icon = window.app_handle().tray_by_id("pake-tray").is_some();
+    let dpr = window.app_handle().state::<SidebarState>().game_dpr(window.label());
     let persist = crate::app::window::persisted_window_state_path(window.app_handle())
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "none".into());
@@ -1443,7 +1489,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let monitor = monitor_inner_ceiling(&window);
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -2054,18 +2100,25 @@ pub fn gbf_set_wiki_outside(window: Window, outside: bool) -> Result<String, Str
 /// #wrapper's right edge, from the game webview. Only applied while locked.
 /// Hugging the OS window to that edge happens in `layout` automatically.
 #[tauri::command]
-pub fn gbf_game_edge(window: Window, right: f64, automatic: bool) -> Result<(), String> {
+pub fn gbf_game_edge(
+    window: Window,
+    right: f64,
+    automatic: bool,
+    dpr: Option<f64>,
+) -> Result<(), String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
     let state = app.state::<SidebarState>();
     if !state.is_locked(&label) {
         return Ok(());
     }
+    let dpr = dpr.filter(|v| *v > 0.05).unwrap_or(0.0);
     if right <= 1.0 {
         if state.game_edge(&label) <= 1.0 {
             return Ok(());
         }
         state.set_game_edge(&label, 0.0);
+        state.set_game_dpr(&label, 0.0);
         let handle = app.clone();
         let win_label = label;
         app.run_on_main_thread(move || {
@@ -2077,12 +2130,21 @@ pub fn gbf_game_edge(window: Window, right: f64, automatic: bool) -> Result<(), 
         return Ok(());
     }
     let same_edge = (state.game_edge(&label) - right).abs() < 0.5;
+    let same_dpr = dpr <= 0.05 || (state.game_dpr(&label) - dpr).abs() < 0.01;
     let same_auto = state.is_automatic(&label) == automatic;
+    let dpr_first = state.game_dpr(&label) <= 0.05 && dpr > 0.05;
     state.set_automatic(&label, automatic);
-    if same_edge && same_auto {
+    if dpr > 0.05 {
+        state.set_game_dpr(&label, dpr);
+    }
+    if same_edge && same_auto && same_dpr {
         return Ok(());
     }
     state.set_game_edge(&label, right);
+    if dpr_first {
+        // First CSS→logical conversion is a few pixels wider; allow one grow.
+        state.set_panel_hug_due(&label, true);
+    }
     let handle = app.clone();
     let win_label = label;
     app.run_on_main_thread(move || {

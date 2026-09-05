@@ -22,18 +22,22 @@
     if (!el) {
       // Steam login and other non-game pages. Clear the stale lock edge so
       // the sidebar cannot sit on top of them.
-      t.core.invoke("gbf_game_edge", { right: 0, automatic: false });
+      t.core.invoke("gbf_game_edge", { right: 0, automatic: false, dpr: 0 });
       return;
     }
     var r = el.getBoundingClientRect();
     if (r.width <= 0) {
-      t.core.invoke("gbf_game_edge", { right: 0, automatic: false });
+      t.core.invoke("gbf_game_edge", { right: 0, automatic: false, dpr: 0 });
       return;
     }
     if (!window.__gbfHug) return;
     var auto = automatic();
     if (auto === null) return;
-    t.core.invoke("gbf_game_edge", { right: r.right, automatic: auto });
+    t.core.invoke("gbf_game_edge", {
+      right: r.right,
+      automatic: auto,
+      dpr: window.devicePixelRatio || 1,
+    });
   };
 
   window.__gbfSetHug = function (on) {
