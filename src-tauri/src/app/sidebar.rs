@@ -223,6 +223,9 @@ struct WindowFlags {
     automatic: bool,
     /// Generation for delayed Automatic hugs so a drag does not snap mid-pull.
     hug_gen: u64,
+    /// One delayed hug after Size/Full. Further Automatic wrap drops must not
+    /// hug again (recording 124025 walk-down).
+    size_hug_gen: u64,
     /// Cancels a delayed wrapper-edge increase when GBF drops back (reload flash).
     edge_apply_gen: u64,
     /// Layout may hug an Automatic window (set after the settle timer).
@@ -456,8 +459,10 @@ impl SidebarState {
         })
     }
 
-    /// Granblue's Size/Full changed the wrapper. Hug leftover. A user OS
-    /// width-drag must not use this — that leftover is grow room (115347).
+    /// Granblue Size/Full: schedule one leftover hug after wrap settles.
+    /// Returns true when the caller should delay that hug. Fixed Size wrap
+    /// changes hug immediately. Automatic wrapper drops after a hug are GBF
+    /// reflow — hugging those walks down to Small (recording 124025).
     pub fn hug_if_game_size_changed(
         &self,
         label: &str,
@@ -465,18 +470,35 @@ impl SidebarState {
         right: f64,
         prev_auto: bool,
         now_auto: bool,
-    ) {
+    ) -> bool {
         if !self.is_locked(label) {
-            return;
+            return false;
         }
         if self.last_auto_resize_recent(label, std::time::Duration::from_millis(2000)) {
-            return;
+            return false;
         }
         let auto_flipped = prev_auto != now_auto;
-        let edge_jumped = prev_edge > 1.0 && (prev_edge - right).abs() > 40.0;
-        if auto_flipped || edge_jumped {
+        let fixed_wrap_changed = !now_auto && prev_edge > 1.0 && (prev_edge - right).abs() > 40.0;
+        if auto_flipped {
+            return true;
+        }
+        if fixed_wrap_changed {
             self.set_panel_hug_due(label, true);
         }
+        false
+    }
+
+    pub fn bump_size_hug_gen(&self, label: &str) -> u64 {
+        let mut out = 0;
+        self.update(label, |f| {
+            f.size_hug_gen = f.size_hug_gen.wrapping_add(1);
+            out = f.size_hug_gen;
+        });
+        out
+    }
+
+    pub fn size_hug_gen(&self, label: &str) -> u64 {
+        self.with(label, |f| f.size_hug_gen)
     }
 
     pub fn last_hug_phys_w(&self, label: &str) -> u32 {
@@ -883,6 +905,32 @@ fn schedule_automatic_hug(host: &Window, col: f64, s: &Split) {
                 return;
             }
             state.set_auto_hug_due(&label, true);
+            if let Some(host) = app_main.get_window(&label) {
+                let _ = layout(&host);
+            }
+        });
+    });
+}
+
+/// One leftover hug after Size/Full, once wrap has settled. Not on every
+/// Automatic reflow — that walks down to Small (recording 124025).
+fn schedule_size_full_hug(app: AppHandle, label: String) {
+    let gen = app.state::<SidebarState>().bump_size_hug_gen(&label);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(3500));
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = app_main.state::<SidebarState>();
+            if state.size_hug_gen(&label) != gen {
+                return;
+            }
+            if state.last_auto_resize_recent(&label, std::time::Duration::from_millis(2000)) {
+                return;
+            }
+            if !state.is_locked(&label) {
+                return;
+            }
+            state.set_panel_hug_due(&label, true);
             if let Some(host) = app_main.get_window(&label) {
                 let _ = layout(&host);
             }
@@ -2295,13 +2343,15 @@ pub fn gbf_game_edge(
                 let prev_auto = state.is_automatic(&win_label);
                 state.set_game_edge(&win_label, pending_right);
                 state.set_game_overlay(&win_label, pending_overlay);
-                state.hug_if_game_size_changed(
+                if state.hug_if_game_size_changed(
                     &win_label,
                     prev_edge,
                     pending_right,
                     prev_auto,
                     true,
-                );
+                ) {
+                    schedule_size_full_hug(app.clone(), win_label.clone());
+                }
                 if let Some(host) = app.get_window(&win_label) {
                     let _ = layout(&host);
                 }
@@ -2321,7 +2371,9 @@ pub fn gbf_game_edge(
     }
     state.set_game_edge(&label, right);
     state.set_game_overlay(&label, overlay);
-    state.hug_if_game_size_changed(&label, current_edge, right, prev_auto, automatic);
+    if state.hug_if_game_size_changed(&label, current_edge, right, prev_auto, automatic) {
+        schedule_size_full_hug(app.clone(), label.clone());
+    }
     if dpr_first || overlay_changed {
         // Automatic lock: leftover is grow room until GBF hits its cap.
         // Hugging on every overlay report snaps a width-drag back
