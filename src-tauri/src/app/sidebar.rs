@@ -119,6 +119,9 @@ struct WindowFlags {
     auto_hug_allowed: bool,
     /// Physical inner width of the last Automatic hug, to ignore its Resized echo.
     last_hug_phys_w: u32,
+    /// Locked + Automatic: do not shrink the game webview below this. The OS
+    /// window may hug; Granblue's viewport must not.
+    game_keep_w: f64,
 }
 
 /// Per-window flags. `--multi-window` must not share collapsed/wiki/lock
@@ -249,8 +252,28 @@ impl SidebarState {
         self.update(label, |f| f.auto_hug_allowed = on);
     }
 
+    pub fn last_hug_phys_w(&self, label: &str) -> u32 {
+        self.with(label, |f| f.last_hug_phys_w)
+    }
+
     pub fn set_last_hug_phys_w(&self, label: &str, w: u32) {
         self.update(label, |f| f.last_hug_phys_w = w);
+    }
+
+    pub fn game_keep_w(&self, label: &str) -> f64 {
+        self.with(label, |f| f.game_keep_w)
+    }
+
+    pub fn raise_game_keep_w(&self, label: &str, w: f64) {
+        self.update(label, |f| {
+            if w > f.game_keep_w {
+                f.game_keep_w = w;
+            }
+        });
+    }
+
+    pub fn set_game_keep_w(&self, label: &str, w: f64) {
+        self.update(label, |f| f.game_keep_w = w);
     }
 
     /// A user width-drag (not our own hug) may have one Automatic snap.
@@ -534,6 +557,8 @@ fn restore_hug_width(host: &Window) -> String {
     }
 }
 
+/// Locked + Automatic: game fills the window (and never shrinks when the OS
+/// frame hugs). Fixed Window Size overlays the same way.
 fn locked_overlay_game(host: &Window) -> bool {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label();
@@ -639,7 +664,21 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
 
     let scale = host.scale_factor()?;
     let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
-    let game_w = if locked_overlay_game(host) {
+    let game_w = if locked && automatic {
+        // Overlay. Never shrink Granblue's viewport because the OS frame hugged.
+        if !state.hug_busy(&label) {
+            let last = state.last_hug_phys_w(&label);
+            let phys = host.inner_size()?.width;
+            if inner_w + HUG_SLACK < state.game_keep_w(&label)
+                && (last == 0 || phys.abs_diff(last) > 8)
+            {
+                state.set_game_keep_w(&label, inner_w);
+            } else {
+                state.raise_game_keep_w(&label, inner_w);
+            }
+        }
+        state.game_keep_w(&label).max(inner_w).max(1.0)
+    } else if locked_overlay_game(host) {
         inner_w.max(1.0)
     } else {
         s.game_w
@@ -866,9 +905,13 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
     let locked = window.app_handle().state::<SidebarState>().is_locked(window.label());
     let edge = window.app_handle().state::<SidebarState>().game_edge(window.label());
     let automatic = window.app_handle().state::<SidebarState>().is_automatic(window.label());
+    let keep = window.app_handle().state::<SidebarState>().game_keep_w(window.label());
+    let hug_allowed = window.app_handle().state::<SidebarState>().auto_hug_allowed(window.label());
+    let hug_busy = window.app_handle().state::<SidebarState>().hug_busy(window.label());
+    let last_hug = window.app_handle().state::<SidebarState>().last_hug_phys_w(window.label());
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nedge={edge:.0}\nkeep={keep:.0}\nhug_allowed={hug_allowed}\nhug_busy={hug_busy}\nlast_hug_phys={last_hug}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -1173,6 +1216,9 @@ fn set_lock(host: &Window, on: bool) -> String {
         host.app_handle()
             .state::<SidebarState>()
             .set_last_hug_phys_w(host.label(), 0);
+        host.app_handle()
+            .state::<SidebarState>()
+            .set_game_keep_w(host.label(), 0.0);
     }
     let mut extra = String::new();
     if !on {
@@ -1183,6 +1229,9 @@ fn set_lock(host: &Window, on: bool) -> String {
         host.app_handle()
             .state::<SidebarState>()
             .set_game_edge(host.label(), 0.0);
+        host.app_handle()
+            .state::<SidebarState>()
+            .set_game_keep_w(host.label(), 0.0);
         extra.push(' ');
         if automatic {
             let _ = host
