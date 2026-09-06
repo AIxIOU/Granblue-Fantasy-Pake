@@ -350,6 +350,8 @@ struct WindowFlags {
     game_zoom: f64,
     /// True between our set_size and the Resized layout that follows it.
     hug_busy: bool,
+    /// Cancels a delayed About/Options slim-hug if the player already moved on.
+    panel_fit_gen: u64,
     /// Lock CSS last pushed into the game page. `None` = unknown, which is
     /// what a page load leaves it as: Granblue rebuilds its document and
     /// takes our style element with it.
@@ -448,6 +450,7 @@ impl SidebarState {
             if open {
                 f.about_open = false;
                 f.options_open = false;
+                f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
             }
         });
     }
@@ -462,6 +465,8 @@ impl SidebarState {
             if open {
                 f.wiki_open = false;
                 f.options_open = false;
+            } else {
+                f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
             }
         });
     }
@@ -476,6 +481,8 @@ impl SidebarState {
             if open {
                 f.wiki_open = false;
                 f.about_open = false;
+            } else {
+                f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
             }
         });
     }
@@ -577,6 +584,19 @@ impl SidebarState {
 
     pub fn set_wiki_panel_w(&self, label: &str, w: f64) {
         self.update(label, |f| f.wiki_panel_w = w);
+    }
+
+    fn bump_panel_fit_gen(&self, label: &str) -> u64 {
+        let mut out = 0;
+        self.update(label, |f| {
+            f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
+            out = f.panel_fit_gen;
+        });
+        out
+    }
+
+    fn panel_fit_gen(&self, label: &str) -> u64 {
+        self.with(label, |f| f.panel_fit_gen)
     }
 
     fn save_panel_before_w(&self, label: &str, width: f64) {
@@ -849,13 +869,13 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     if want_phys == 0 || want_phys == phys.width {
         return Ok(false);
     }
-    // A shrink while a panel is open is Wiki → About/Options. That is the
-    // flash: WebView2's HWND and the parent paint in different processes, so
-    // DWM shows the parent through the game/sidebar seam for a frame or two
-    // (WebView2Feedback #906, Uno #22694). SWP_NOREDRAW does not reach that
-    // surface. The 0-flash control was skip-resize, so do not shrink here.
-    // Closing a panel has reserved 0 and still hugs.
-    if want_phys < phys.width && reserved_panel_w(&state, &label, s.wiki_w) > 1.0 {
+    // A shrink in the SAME layout as Wiki → About/Options is the flash
+    // (parent HWND through the game/sidebar seam). Skip that shrink while
+    // the panel is still filling the leftover. After the panel has painted,
+    // schedule_slim_panel_hug drops reserved to the About/Options tier and
+    // hugging is allowed again. Closing a panel has reserved 0 and still hugs.
+    if want_phys < phys.width && reserved_panel_w(&state, &label, s.wiki_w) > ABOUT_W + WIKI_TIER_SLACK
+    {
         return Ok(false);
     }
     state.set_hug_busy(&label, true);
@@ -1144,8 +1164,9 @@ fn prepare_panel_open(
     let bar = sidebar_want(collapsed || need_collapse);
     let space = (after - game_col - bar).max(0.0);
     // Prefer the tier when the frame was grown to it. If leftover is already
-    // larger (Wiki → About), keep that leftover so the incoming panel covers
-    // the wiki column instead of leaving a hole and then hugging.
+    // larger (Wiki → About), keep that leftover for the FIRST paint so the
+    // incoming panel covers the wiki column. schedule_slim_panel_hug then
+    // hugs to the About/Options tier once they are on screen.
     let reserved = if space >= prefer - WIKI_TIER_SLACK {
         if space > prefer + WIKI_TIER_SLACK {
             space
@@ -1178,6 +1199,48 @@ fn prepare_about_open(host: &Window) -> Result<String, String> {
 
 fn prepare_options_open(host: &Window) -> Result<String, String> {
     prepare_panel_open(host, ABOUT_W, ABOUT_MIN_W, "options")
+}
+
+/// Hug About/Options to their own width after they have painted.
+///
+/// Wiki → About/Options must not shrink in the same layout as the switch
+/// (that is the parent-background flash; confirmed in play). Once the new
+/// panel is on screen the window can hug down to 470. A later shrink can
+/// still show a dark seam — not the wiki jumping into the game.
+const PANEL_SLIM_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
+
+fn schedule_slim_panel_hug(host: &Window) {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label().to_string();
+    if !(state.about_is_open(&label) || state.options_is_open(&label)) {
+        return;
+    }
+    if state.wiki_panel_w(&label) <= ABOUT_W + WIKI_TIER_SLACK {
+        return;
+    }
+    let gen = state.bump_panel_fit_gen(&label);
+    let app = host.app_handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(PANEL_SLIM_AFTER);
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = app_main.state::<SidebarState>();
+            if state.panel_fit_gen(&label) != gen {
+                return;
+            }
+            if state.wiki_is_open(&label) {
+                return;
+            }
+            if !(state.about_is_open(&label) || state.options_is_open(&label)) {
+                return;
+            }
+            let Some(host) = app_main.get_window(&label) else {
+                return;
+            };
+            state.set_wiki_panel_w(&label, ABOUT_W);
+            let _ = layout(&host);
+        });
+    });
 }
 
 fn wait_for_game_edge(app: &AppHandle, label: &str) -> f64 {
@@ -2114,6 +2177,7 @@ pub fn gbf_about_toggle(window: Window) -> Result<String, String> {
                     // Shared webview: point it at this page before laying out.
                     out.push_str(&show_panel_page(&host, ABOUT_PAGE));
                     out.push_str(&layout_verbose(&host));
+                    schedule_slim_panel_hug(&host);
                     out
                 }
                 Err(notice) => {
@@ -2220,6 +2284,7 @@ pub fn gbf_options_toggle(window: Window) -> Result<String, String> {
                     // Shared webview: point it at this page before laying out.
                     out.push_str(&show_panel_page(&host, OPTIONS_PAGE));
                     out.push_str(&layout_verbose(&host));
+                    schedule_slim_panel_hug(&host);
                     out
                 }
                 Err(notice) => {
