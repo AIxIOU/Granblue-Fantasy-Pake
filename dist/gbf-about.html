@@ -85,9 +85,23 @@
 <div id="gbf-about-body">
   <h1>GBF Pake <span class="badge">NATIVE</span></h1>
   <p class="lede">A desktop wrapper for Granblue Fantasy. This build is an
-  experiment: the sidebar and wiki live in their own webviews beside the game,
-  not inside Granblue's document. The game itself runs exactly as it does in a
-  browser — nothing here modifies it.</p>
+  experiment: the sidebar, the wiki and this page live in their own webviews
+  beside the game, not inside Granblue's document. The game itself runs
+  exactly as Cygames served it — nothing here modifies it.</p>
+
+  <h2>Two clients</h2>
+  <p class="lede">Granblue serves two different clients, and Options chooses
+  which one to ask for. Switching restarts the app.</p>
+  <ul>
+    <li><b>Mobile (the default).</b> A lighter client with no chat column,
+    laid out at a fixed width. It never reloads when you resize the window,
+    which is why it is the default. <b>Game size</b> in the sidebar picks
+    Large or Small — that is this app zooming its own webview, not a Granblue
+    setting.</li>
+    <li><b>Desktop.</b> The PC client, with its own Window Size settings in
+    Granblue. <b>Layout / Lock</b> and the sidebar's <b>Back</b> and
+    <b>Reload</b> appear only here.</li>
+  </ul>
 
   <h2>Keyboard shortcuts</h2>
   <p class="lede">All of these are <kbd>Alt</kbd>-modified so they cannot shadow
@@ -113,7 +127,7 @@
     <tr><td>Casino</td><td><kbd>Alt</kbd>+<kbd>]</kbd></td></tr>
     <tr><td>Gacha</td><td><kbd>Alt</kbd>+<kbd>;</kbd></td></tr>
     <tr><td>Collapse / expand the sidebar</td><td><kbd>Alt</kbd>+<kbd>\</kbd></td></tr>
-    <tr><td>Lock / unlock the chat column</td><td><kbd>Alt</kbd>+<kbd>L</kbd></td></tr>
+    <tr><td>Lock / unlock the chat column <i>(desktop client)</i></td><td><kbd>Alt</kbd>+<kbd>L</kbd></td></tr>
     <tr><td>Open / close the wiki</td><td><kbd>Alt</kbd>+<kbd>W</kbd></td></tr>
     <tr><td>Reload this page</td><td><kbd>Alt</kbd>+<kbd>R</kbd></td></tr>
     <tr><td>Back</td><td><kbd>Alt</kbd>+<kbd>Left</kbd></td></tr>
@@ -124,16 +138,28 @@
     <li><b>Drag to scroll.</b> Click and drag anywhere that already scrolls —
     the game's own pages as well as this sidebar — and it scrolls with the
     drag, with momentum. A drag never activates the control underneath it.</li>
-    <li><b>Locked mode.</b> Opening the wiki or this page hides Granblue's chat
-    column (<kbd>Alt</kbd>+<kbd>L</kbd> does the same by hand) so the panel
-    uses that space instead of squeezing the game.</li>
+    <li><b>Locked mode</b> <i>(desktop client)</i><b>.</b> Opening a panel
+    hides Granblue's chat column (<kbd>Alt</kbd>+<kbd>L</kbd> does the same by
+    hand) so the panel uses that space instead of squeezing the game. The
+    mobile client has no chat column, so there is nothing to hide.</li>
     <li><b>The wiki keeps its place.</b> Close and reopen it and you are on the
-    same page, at the same scroll, because the webview is hidden rather than
-    destroyed. This About page cannot wipe it.</li>
-    <li><b>Back and Reload</b> sit at the bottom of the sidebar and drive
-    Granblue, not this page. <kbd>Alt</kbd>+<kbd>Left</kbd> and
-    <kbd>Alt</kbd>+<kbd>R</kbd> still apply to whichever webview has
-    focus.</li>
+    same page, at the same scroll, because its webview is hidden rather than
+    destroyed. Opening this page or Options cannot wipe it — the wiki has a
+    webview to itself, and About and Options share a second one between
+    them.</li>
+    <li><b>The sidebar follows the game.</b> Shortcut rows light up to show
+    where you are in Granblue. The sidebar reads the game's address; it never
+    writes to it.</li>
+    <li><b>Back and Reload</b> <i>(desktop client)</i> sit at the bottom of the
+    sidebar and drive Granblue, not this page. <kbd>Alt</kbd>+<kbd>Left</kbd>
+    and <kbd>Alt</kbd>+<kbd>R</kbd> still apply to whichever webview has
+    focus, on either client.</li>
+    <li><b>Panels can sit on either side of the sidebar.</b> Options has the
+    choice: right of the sidebar (the default, so the rail stays against the
+    game) or between the game and the sidebar.</li>
+    <li><b>Three themes.</b> Midnight, Ember and Tide, in Options. They tint
+    this app's own chrome only — the sidebar, Options and this page. Granblue
+    is never themed.</li>
     <li><b>Reload flash is gone.</b> Granblue can tear its own page down; the
     sidebar is a different webview and is not rebuilt.</li>
   </ul>
@@ -141,16 +167,25 @@
   <h2>Limitations, and why</h2>
   <ul>
     <li><b>On the desktop client with Automatic Resizing, the sidebar and
-    panels are hidden</b> so Granblue has the whole window. The mobile
-    client (the default) never reloads when the window resizes.</li>
+    panels are hidden</b> so Granblue has the whole window, and nothing of
+    this app runs in the page. That mode re-fits and reloads on every width
+    change, so anything placed beside it would fight you. The mobile client
+    never re-fits, which is why it is the default.</li>
     <li><b>macOS and Linux are untested</b> in this experiment. The shipping
     client is also unverified there.</li>
   </ul>
 
   <h2>Granblue is never modified</h2>
-  <p>The app reads the game's layout only where it must, and hides its chat
-  column in locked mode with CSS <code>display</code> only. It never changes
-  the game's settings, its code, or its network traffic.</p>
+  <p>The game runs in the form Cygames served it. This app reads the game's
+  layout where it must, and in locked mode hides the chat column with CSS
+  <code>display</code> alone. It never changes Granblue's settings, its code,
+  or what it sends and receives.</p>
+  <p>The one thing it does ask for is <b>which client to be served</b>: the
+  mobile option sends a phone User-Agent with the page request, exactly as a
+  phone browser would. That is a request for a version Cygames already
+  publishes, made before the page exists. Once the page arrives it is left
+  alone — no scripts rewritten, no traffic altered, nothing injected to
+  "make it mobile."</p>
 </div>
 <script>
   function applyTheme(t) {
