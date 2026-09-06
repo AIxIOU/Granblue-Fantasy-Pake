@@ -21,7 +21,9 @@
     8: "#profile",
     9: "#shop",
     0: "#shop/exchange/trajectory",
-    "-": "#arcarum",
+    // #arcarum redirects to #arcarum2; keep this the same as the sidebar
+    // row so Alt+- and the click land on the hash the highlight expects.
+    "-": "#arcarum2",
     "=": "#frontier/alchemy/top",
     "[": "#trial_battle",
     "]": "#casino",

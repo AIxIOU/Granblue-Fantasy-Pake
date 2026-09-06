@@ -1477,6 +1477,23 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     }
 
     let col = column_x(host, &s);
+    // On MOBILE the game column is ours to choose, not something to read back
+    // from Granblue.
+    //
+    // `column_x` derives the column from GBF's reported `#wrapper` edge times
+    // the dpr it reported with it -- and at startup that dpr arrives BEFORE
+    // our page zoom lands, so the column comes out at a fraction of its real
+    // width. 320 css x 0.966 dpr / 1.104 scale = 280 logical = 309 physical,
+    // which is exactly how wide the game webview was left, with a black gap
+    // from there to the sidebar at 721 (screenshot 2026-09-06).
+    //
+    // That race was always there; it was invisible while the game took the
+    // whole frame, and narrowing the game to its column exposed it. Reading
+    // the width back is the wrong shape for this client anyway: the mobile
+    // layout is a fixed 320 css px at a zoom WE set, so the column is simply
+    // the frame minus our own chrome. `split()` already computes exactly that
+    // and clamps it to MIN_GAME_WIDTH, so it cannot collapse.
+    let col = if mobile { s.game_w } else { col };
     let edge = state.game_edge(&label);
     let want_w = col + s.wiki_w + s.sidebar_w;
 

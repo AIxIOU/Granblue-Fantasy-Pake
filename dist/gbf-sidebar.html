@@ -300,7 +300,11 @@
     { section: "More" },
     { label: "Shop",          hash: "#shop",                     icon: "⛁", key: "9" },
     { label: "Journey Drops", hash: "#shop/exchange/trajectory", icon: "✧", key: "0" },
-    { label: "Arcarum",       hash: "#arcarum",                  icon: "☆", key: "-" },
+    // Granblue redirects #arcarum to #arcarum2, so the row has to carry the
+    // hash the game actually lands on or markGameHash never lights it: the
+    // rule matches an exact hash or a "/"-delimited child, and "#arcarum2"
+    // is neither. Verified 2026-09-06 -- #arcarum2 is stable on arrival.
+    { label: "Arcarum",       hash: "#arcarum2",                 icon: "☆", key: "-" },
     { label: "Alchemy Lab",   hash: "#frontier/alchemy/top",     icon: "⚗", key: "=" },
     { label: "Trial Battles", hash: "#trial_battle",             icon: "⚔", key: "[" },
     { label: "Casino",        hash: "#casino",                   icon: "♠", key: "]" },
