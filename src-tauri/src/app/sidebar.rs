@@ -53,8 +53,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{
-    webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalSize, Url,
-    Webview, WebviewUrl, WebviewWindow, Window, WindowEvent,
+    utils::config::Color, webview::WebviewBuilder, AppHandle, LogicalPosition, LogicalSize, Manager,
+    PhysicalSize, Url, Webview, WebviewUrl, WebviewWindow, Window, WindowEvent,
 };
 
 /// Expanded width, matching `SIDEBAR_W` in gbf-scaler.js so the two builds are
@@ -97,6 +97,24 @@ const WIKI_URL: &str = "https://gbf.wiki/";
 const LOCK_STYLE_ID: &str = "gbf-native-locked";
 /// Granblue's own chat column. Hiding it is RULE 0 EXCEPTION 2.
 const LOCK_SELECTOR: &str = "#submenu,#general-chat{display:none !important;}";
+
+/// What a webview paints before it has content: its FIRST frame after the
+/// frame is resized, which is the panel-switch flash.
+///
+/// A window resize makes WebView2 re-composite, and its blank frame is WHITE
+/// by default -- a white strip over the game/sidebar seam for one to three
+/// frames on every shrink. That repaint cannot be suppressed from our side:
+/// measured, `SWP_NOREDRAW` on the frame changed nothing, and freezing the
+/// window with `WM_SETREDRAW` made it worse (the whole strip went white
+/// instead of part of it). WebView2 composites out of process, so the classic
+/// GDI redraw suppression does not reach it. Skipping the resize entirely
+/// removed the flash completely, which is what proved the resize is the
+/// trigger -- but the resize is what keeps the frame hugged to the content.
+///
+/// So: stop fighting the repaint and make it invisible. Granblue's page and
+/// the sidebar are both near-black, so a near-black blank frame reads as
+/// nothing at all.
+const WEBVIEW_BLANK: Color = Color(11, 11, 15, 255);
 
 /// One sidebar per window, so `--multi-window` keeps working: each window gets
 /// its own game webview and its own sidebar beside it.
@@ -1479,6 +1497,11 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
             restore_layout_wiki_outside(host.app_handle(), host.label()),
         );
 
+    // The two that meet at the seam. See WEBVIEW_BLANK.
+    for wv in [game_webview(&host), sidebar_webview(&host)].into_iter().flatten() {
+        let _ = wv.set_background_color(Some(WEBVIEW_BLANK));
+    }
+
     layout(&host)?;
     crate::app::window::persist_window_geometry(host.app_handle());
     persist_layout_state(host.app_handle());
@@ -1776,6 +1799,7 @@ fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
         LogicalSize::new(WIKI_W, sp.height),
     )?;
     if let Some(w) = wiki_webview(host) {
+        let _ = w.set_background_color(Some(WEBVIEW_BLANK));
         let _ = w.hide();
     }
     Ok(())
@@ -1790,6 +1814,7 @@ fn create_panel(host: &Window, sp: &Split) -> tauri::Result<()> {
         LogicalSize::new(ABOUT_W, sp.height),
     )?;
     if let Some(w) = panel_webview(host) {
+        let _ = w.set_background_color(Some(WEBVIEW_BLANK));
         let _ = w.hide();
     }
     Ok(())
