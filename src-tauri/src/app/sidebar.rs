@@ -1534,7 +1534,27 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             out.push_str(&format!("panel hide={}\n", hide_panel(&panel)));
         }
     }
-    let game_w = if (lock_fill || unlock_snap) && panel_open {
+    // The game webview gets the WHOLE frame only on the desktop client.
+    //
+    // That is the overlay model, and there it is right: GBF's desktop layout
+    // fills the extra width with its own chat column, which the sidebar then
+    // covers. The MOBILE client has no chat column -- its layout is a fixed
+    // 320 CSS px -- so handing it the whole frame just hands it empty page,
+    // and GBF's own fixed-position chrome anchors to the far edge of that
+    // instead of to the game.
+    //
+    // Measured 2026-09-06 against Thorium's installed Granblue app, same page,
+    // same UA, same DPR: Thorium gives the page a 333px viewport (13px past
+    // the 320 layout) and `.img-load` -- `position: fixed; right: 0` -- lands
+    // at 103..333, over the game. Ours was 443 wide, so it landed at 213..443,
+    // 123px right of the game's edge and visibly cut off. Narrowing the game
+    // webview to the game column puts the viewport at exactly 320 and the
+    // indicator back at 90..320.
+    //
+    // So on mobile the game takes its column and the sidebar sits BESIDE it,
+    // not over it. col + sidebar is the whole frame either way, so this adds
+    // no dead space.
+    let game_w = if (lock_fill || unlock_snap) && (panel_open || mobile) {
         col.max(1.0)
     } else if lock_fill {
         inner_w.max(1.0)
