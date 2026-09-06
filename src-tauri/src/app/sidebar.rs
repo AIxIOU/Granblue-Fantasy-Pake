@@ -126,12 +126,12 @@ const LOCK_SELECTOR: &str = "#submenu,#general-chat{display:none !important;}";
 ///   pointed at the window itself.
 ///
 /// Skipping the resize entirely removed it, which is what proved the resize
-/// is the trigger -- but the resize is what keeps the frame hugged to the
-/// content, so it stays.
+/// is the trigger. Wiki → About/Options now keeps the frame width and lets
+/// the incoming panel cover the leftover, so that shrink does not run.
+/// Closing a panel still hugs; the near-black background is for that path.
 ///
 /// Granblue's page and the sidebar are both near-black, so a near-black
-/// window background makes the repaint invisible. It still happens; there is
-/// simply nothing bright to see.
+/// window background makes a remaining close-shrink repaint invisible.
 const WEBVIEW_BLANK: Color = Color(11, 11, 15, 255);
 
 /// One sidebar per window, so `--multi-window` keeps working: each window gets
@@ -841,13 +841,21 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     }
     // hug_busy blocks a grow/shrink loop while our set_size echoes. Nested
     // layout during Wiki grow used to hug back to About's width and refuse
-    // ("Not enough room", recording 180531). Leftover after Wiki→About is
-    // hugged once layout finishes and clears hug_busy.
+    // ("Not enough room", recording 180531).
     if state.hug_busy(&label) {
         return Ok(false);
     }
     let want_phys = (want_w * scale).round() as u32;
     if want_phys == 0 || want_phys == phys.width {
+        return Ok(false);
+    }
+    // A shrink while a panel is open is Wiki → About/Options. That is the
+    // flash: WebView2's HWND and the parent paint in different processes, so
+    // DWM shows the parent through the game/sidebar seam for a frame or two
+    // (WebView2Feedback #906, Uno #22694). SWP_NOREDRAW does not reach that
+    // surface. The 0-flash control was skip-resize, so do not shrink here.
+    // Closing a panel has reserved 0 and still hugs.
+    if want_phys < phys.width && reserved_panel_w(&state, &label, s.wiki_w) > 1.0 {
         return Ok(false);
     }
     state.set_hug_busy(&label, true);
@@ -1121,7 +1129,12 @@ fn prepare_panel_open(
     // The span, not the span+buffer: the buffer is for the fits() decision
     // above. Asking for it here is what left the 2px gap.
     let want = panel_span(game_col, chosen, collapsed || need_collapse);
-    let after = match fit_inner_width(host, want, true) {
+    // Grow only. Shrinking here ran while the previous panel was still the
+    // open flag, so Wiki → About resized the HWND with the wiki still on
+    // screen. That is the parent-background flash (05ay) and what read as
+    // the wiki jumping into the game. Opening from a hugged window still
+    // grows; switching from a wider panel keeps the leftover and covers it.
+    let after = match fit_inner_width(host, want, false) {
         Ok(v) => v,
         Err(e) => {
             undo_collapse(&state);
@@ -1130,21 +1143,15 @@ fn prepare_panel_open(
     };
     let bar = sidebar_want(collapsed || need_collapse);
     let space = (after - game_col - bar).max(0.0);
-    // Reserve the TIER, not the measured leftover.
-    //
-    // `space` is derived from the width the resize actually achieved, which
-    // carries a logical<->physical rounding of its own, so `space.min(prefer)`
-    // made the reserved width depend on HOW the panel was reached: opening
-    // About from the wiki reserved 469.x, opening it from Options reserved
-    // 470. `maybe_hug_window` targets `col + reserved + bar`, so that 1px fed
-    // straight into the frame width and the frame twitched on every switch
-    // between the two paths.
-    //
-    // The tier is the promise -- 470 means 470. `fits()` above has already
-    // checked it against the monitor, so if the frame is a pixel short the
-    // hug grows it rather than the panel quietly shrinking.
+    // Prefer the tier when the frame was grown to it. If leftover is already
+    // larger (Wiki → About), keep that leftover so the incoming panel covers
+    // the wiki column instead of leaving a hole and then hugging.
     let reserved = if space >= prefer - WIKI_TIER_SLACK {
-        prefer
+        if space > prefer + WIKI_TIER_SLACK {
+            space
+        } else {
+            prefer
+        }
     } else if space >= minimum {
         minimum
     } else {
@@ -1309,6 +1316,18 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     } else {
         0.0
     };
+    // Park unused panels before the game/sidebar move. A shrink with the wiki
+    // HWND still in the frame is what read as the wiki flashing into the game.
+    if !wiki_open {
+        if let Some(wiki) = wiki_webview(host) {
+            out.push_str(&format!("wiki hide={}\n", hide_panel(&wiki)));
+        }
+    }
+    if !about_open && !options_open {
+        if let Some(panel) = panel_webview(host) {
+            out.push_str(&format!("panel hide={}\n", hide_panel(&panel)));
+        }
+    }
     let game_w = if (lock_fill || unlock_snap) && panel_open {
         col.max(1.0)
     } else if lock_fill {
@@ -1456,6 +1475,26 @@ fn hide_panel(wv: &Webview) -> String {
     h
 }
 
+/// Stop the parent HWND painting over its children on a resize.
+///
+/// WS_CLIPCHILDREN is the GDI-side half of this flash (parent erase under the
+/// game/sidebar seam). It does not fix WebView2's out-of-process compositor
+/// (that needs skip-resize); it does stop the parent brush from drawing where
+/// a child already is.
+#[cfg(windows)]
+fn clip_host_children(host: &Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_STYLE, WS_CLIPCHILDREN,
+    };
+    let Ok(hwnd) = host.hwnd() else {
+        return;
+    };
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd.0, GWL_STYLE);
+        let _ = SetWindowLongPtrW(hwnd.0, GWL_STYLE, style | WS_CLIPCHILDREN as isize);
+    }
+}
+
 fn result_word<T>(r: &tauri::Result<T>) -> String {
     match r {
         Ok(_) => "ok".to_string(),
@@ -1518,6 +1557,8 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     // The two that meet at the seam. See WEBVIEW_BLANK.
     // THE HOST WINDOW is the one that matters -- see WEBVIEW_BLANK.
     let _ = host.set_background_color(Some(WEBVIEW_BLANK));
+    #[cfg(windows)]
+    clip_host_children(&host);
     for wv in [game_webview(&host), sidebar_webview(&host)]
         .into_iter()
         .flatten()
