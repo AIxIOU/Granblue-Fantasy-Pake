@@ -6,13 +6,41 @@
   destroy the wiki's page, scroll or history. Served from tauri://localhost.
 -->
 <style>
-  :root {
+  :root, html[data-theme="midnight"] {
     --bg: #14171f;
     --fg: #e8e2d2;
     --muted: #cfc7b4;
     --gold: #f2e2b6;
     --line: #3a3020;
     --kbd-border: #5c4a2e;
+    --accent: #7aa2f7;
+    --heading: #e9d097;
+    --heading-line: rgba(201,169,110,0.35);
+    --badge-ink: #0d1017;
+  }
+  html[data-theme="ember"] {
+    --bg: #1c1410;
+    --fg: #f0e4d0;
+    --muted: #c4a888;
+    --gold: #f4d08a;
+    --line: #3d2c20;
+    --kbd-border: #6a4a28;
+    --accent: #e8a04a;
+    --heading: #f0c878;
+    --heading-line: rgba(232,160,74,0.4);
+    --badge-ink: #1a1208;
+  }
+  html[data-theme="tide"] {
+    --bg: #0e181a;
+    --fg: #d4eeea;
+    --muted: #8fb8b0;
+    --gold: #a8e6d8;
+    --line: #1c3034;
+    --kbd-border: #2a484c;
+    --accent: #3ecfb2;
+    --heading: #8fd4c8;
+    --heading-line: rgba(62,207,178,0.35);
+    --badge-ink: #061210;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -32,8 +60,8 @@
   }
   h2 {
     font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
-    color: #e9d097; margin: 20px 0 6px;
-    border-bottom: 1px solid rgba(201,169,110,0.35); padding-bottom: 3px;
+    color: var(--heading); margin: 20px 0 6px;
+    border-bottom: 1px solid var(--heading-line); padding-bottom: 3px;
   }
   p.lede { color: var(--muted); margin: 0 0 4px; }
   ul { margin: 4px 0; padding-left: 18px; }
@@ -50,7 +78,7 @@
   }
   .badge {
     display: inline-block; font: 9px/1.2 -apple-system, "Segoe UI", sans-serif;
-    letter-spacing: .5px; color: #0d1017; background: #7aa2f7;
+    letter-spacing: .5px; color: var(--badge-ink); background: var(--accent);
     padding: 2px 5px; border-radius: 3px; vertical-align: middle;
   }
 </style>
@@ -120,3 +148,15 @@
   column in locked mode with CSS <code>display</code> only. It never changes
   the game's settings, its code, or its network traffic.</p>
 </div>
+<script>
+  function applyTheme(t) {
+    document.documentElement.setAttribute("data-theme", t || "midnight");
+  }
+  window.__gbfAbout = { setTheme: applyTheme };
+  var t = window.__TAURI__;
+  if (t && t.core && t.core.invoke) {
+    t.core.invoke("gbf_panel_state")
+      .then(function (st) { applyTheme(st && st.theme); })
+      .catch(function () {});
+  }
+</script>

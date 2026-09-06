@@ -132,7 +132,55 @@ const LOCK_SELECTOR: &str = "#submenu,#general-chat{display:none !important;}";
 ///
 /// Granblue's page and the sidebar are both near-black, so a near-black
 /// window background makes a remaining close-shrink repaint invisible.
+///
+/// Chrome themes retint this so a remaining shrink still matches the rail,
+/// not a leftover midnight strip on Ember/Tide.
 const WEBVIEW_BLANK: Color = Color(11, 11, 15, 255);
+
+fn normalize_theme(theme: &str) -> String {
+    match theme.trim().to_ascii_lowercase().as_str() {
+        "ember" => "ember".into(),
+        "tide" => "tide".into(),
+        _ => "midnight".into(),
+    }
+}
+
+fn theme_blank(theme: &str) -> Color {
+    match normalize_theme(theme).as_str() {
+        "ember" => Color(18, 12, 8, 255),
+        "tide" => Color(8, 14, 16, 255),
+        _ => WEBVIEW_BLANK,
+    }
+}
+
+fn theme_js(theme: &str) -> String {
+    serde_json::to_string(&normalize_theme(theme)).unwrap_or_else(|_| "\"midnight\"".into())
+}
+
+fn theme_boot_script(host: &Window) -> String {
+    let theme = host.app_handle().state::<SidebarState>().theme();
+    format!(
+        "document.documentElement.setAttribute('data-theme', {});",
+        theme_js(&theme)
+    )
+}
+
+fn apply_theme_blank(host: &Window) {
+    let theme = host.app_handle().state::<SidebarState>().theme();
+    let color = theme_blank(&theme);
+    let _ = host.set_background_color(Some(color));
+    for wv in [
+        game_webview(host),
+        sidebar_webview(host),
+        wiki_webview(host),
+        panel_webview(host),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let _ = wv.set_background_color(Some(color));
+    }
+}
 
 /// One sidebar per window, so `--multi-window` keeps working: each window gets
 /// its own game webview and its own sidebar beside it.
@@ -211,6 +259,10 @@ struct SavedLayout {
     /// here is simply the webview zoom we render it at.
     #[serde(default)]
     mobile_half: bool,
+    /// Chrome theme for the sidebar, Options, and About. Process-wide.
+    /// Missing or unknown = midnight (the original palette).
+    #[serde(default)]
+    theme: String,
 }
 
 fn default_wiki_outside() -> bool {
@@ -252,6 +304,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 tray: sidebar.is_tray_enabled(),
                 desktop_client: sidebar.is_desktop_client(),
                 mobile_half: sidebar.is_mobile_half(),
+                theme: sidebar.theme(),
             },
         );
     }
@@ -324,6 +377,17 @@ pub fn restore_layout_tray(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Chrome theme. Process-wide, like the tray flag. Default midnight.
+pub fn restore_layout_theme(app: &AppHandle) -> String {
+    let states = load_layout_states(app);
+    let raw = states
+        .get("pake")
+        .map(|s| s.theme.as_str())
+        .or_else(|| states.values().next().map(|s| s.theme.as_str()))
+        .unwrap_or("");
+    normalize_theme(raw)
+}
+
 #[derive(Default, Clone, Copy)]
 struct WindowFlags {
     collapsed: bool,
@@ -389,6 +453,8 @@ pub struct SidebarState {
     desktop_client: AtomicBool,
     /// Process-wide. Mobile size: false = Default (zoom 2), true = Half (zoom 1).
     mobile_half: AtomicBool,
+    /// Process-wide. Sidebar / Options / About palette. Empty = midnight.
+    theme: Mutex<String>,
 }
 
 impl SidebarState {
@@ -424,6 +490,16 @@ impl SidebarState {
 
     pub fn set_mobile_half(&self, on: bool) {
         self.mobile_half.store(on, Ordering::Relaxed);
+    }
+
+    pub fn theme(&self) -> String {
+        let guard = self.theme.lock().unwrap_or_else(|e| e.into_inner());
+        normalize_theme(guard.as_str())
+    }
+
+    pub fn set_theme(&self, theme: &str) {
+        let mut guard = self.theme.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = normalize_theme(theme);
     }
 
     pub fn is_collapsed(&self, label: &str) -> bool {
@@ -1293,6 +1369,8 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let desktop_client = state.is_desktop_client();
     let mobile = state.is_mobile(&label);
     let mobile_half = state.is_mobile_half();
+    let theme = state.theme();
+    let theme_js = theme_js(&theme);
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
@@ -1471,10 +1549,11 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             } else {
                 out.push_str(&format!("panel hide={}\n", hide_panel(&panel)));
             }
-            // Harmless while About is showing: the guard is on the page, and
-            // gbf-about.html defines no __gbfOptions.
+            // Theme lands even while About is showing (setAttribute). Options
+            // also asks gbf_panel_state on load because this eval can race
+            // the About→Options navigation.
             let e = panel.eval(format!(
-                "window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile}}})"
+                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js}}})"
             ));
             out.push_str(&format!("panel eval={}\n", result_word(&e)));
         }
@@ -1486,7 +1565,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js}}})"
             ));
             // show() is enough after desktop Automatic hid the rail. hide()
             // then show() blanks WebView2 white on every layout, twice when
@@ -1587,7 +1666,9 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     //
     // No auto_resize(): this webview is positioned by layout() alone. Letting
     // Tauri grow it with the window would put it back on top of the game.
-    let builder = WebviewBuilder::new(&label, WebviewUrl::App("gbf-sidebar.html".into()));
+    let boot = theme_boot_script(&host);
+    let builder = WebviewBuilder::new(&label, WebviewUrl::App("gbf-sidebar.html".into()))
+        .initialization_script(&boot);
 
     host.add_child(
         builder,
@@ -1617,17 +1698,10 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
             restore_layout_wiki_outside(host.app_handle(), host.label()),
         );
 
-    // The two that meet at the seam. See WEBVIEW_BLANK.
-    // THE HOST WINDOW is the one that matters -- see WEBVIEW_BLANK.
-    let _ = host.set_background_color(Some(WEBVIEW_BLANK));
+    // The host window is the one that matters -- see WEBVIEW_BLANK.
+    apply_theme_blank(&host);
     #[cfg(windows)]
     clip_host_children(&host);
-    for wv in [game_webview(&host), sidebar_webview(&host)]
-        .into_iter()
-        .flatten()
-    {
-        let _ = wv.set_background_color(Some(WEBVIEW_BLANK));
-    }
 
     layout(&host)?;
     crate::app::window::persist_window_geometry(host.app_handle());
@@ -1819,13 +1893,14 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .app_handle()
         .state::<SidebarState>()
         .is_desktop_client();
+    let theme = window.app_handle().state::<SidebarState>().theme();
     let page_zoom = window
         .app_handle()
         .state::<SidebarState>()
         .page_zoom(window.label());
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\ntheme={theme}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -1926,7 +2001,8 @@ fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
         LogicalSize::new(WIKI_W, sp.height),
     )?;
     if let Some(w) = wiki_webview(host) {
-        let _ = w.set_background_color(Some(WEBVIEW_BLANK));
+        let theme = host.app_handle().state::<SidebarState>().theme();
+        let _ = w.set_background_color(Some(theme_blank(&theme)));
         let _ = w.hide();
     }
     Ok(())
@@ -1934,14 +2010,18 @@ fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
 
 fn create_panel(host: &Window, sp: &Split) -> tauri::Result<()> {
     let label = panel_label(host.label());
+    let keys = include_str!("../inject/gbf-keys.js");
+    let boot = theme_boot_script(host);
+    let init = format!("{keys}\n{boot}");
     host.add_child(
         WebviewBuilder::new(&label, WebviewUrl::App(ABOUT_PAGE.into()))
-            .initialization_script(include_str!("../inject/gbf-keys.js")),
+            .initialization_script(&init),
         LogicalPosition::new(sp.game_w, 0.0),
         LogicalSize::new(ABOUT_W, sp.height),
     )?;
     if let Some(w) = panel_webview(host) {
-        let _ = w.set_background_color(Some(WEBVIEW_BLANK));
+        let theme = host.app_handle().state::<SidebarState>().theme();
+        let _ = w.set_background_color(Some(theme_blank(&theme)));
         let _ = w.hide();
     }
     Ok(())
@@ -2552,7 +2632,45 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
         "tray": state.is_tray_enabled(),
         "desktopClient": state.is_desktop_client(),
         "mobile": state.is_mobile(label),
+        "theme": state.theme(),
     }))
+}
+
+/// Palette for the sidebar, Options, and About. Granblue and gbf.wiki keep
+/// their own look. Process-wide, like the tray flag.
+#[tauri::command]
+pub fn gbf_set_theme(window: Window, theme: String) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let theme = {
+        let state = app.state::<SidebarState>();
+        state.set_theme(&theme);
+        state.theme()
+    };
+    persist_layout_state(&app);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let mut labels: Vec<String> = handle.windows().keys().cloned().collect();
+        labels.sort();
+        let mut out = format!("theme={theme}\n");
+        for label in labels {
+            match handle.get_window(&label) {
+                Some(host) => {
+                    apply_theme_blank(&host);
+                    out.push_str(&layout_verbose(&host));
+                }
+                None => out.push_str(&format!("get_window({label}) -> None\n")),
+            }
+        }
+        let _ = tx.send(out);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    Ok(report)
 }
 
 #[tauri::command]

@@ -13,13 +13,53 @@
   webview -- the same thing clicking Granblue's own menu does.
 -->
 <style>
-  :root {
+  :root, html[data-theme="midnight"] {
     --bg: #14171f;
     --bg-hover: #1e2330;
+    --bg-deep: #10131a;
     --fg: #c9d1e0;
+    --fg-bright: #ffffff;
     --fg-dim: #6b7688;
     --accent: #7aa2f7;
     --line: #232838;
+    --badge-ink: #0d1017;
+    --notice-bg: #2a2f3a;
+    --notice-fg: #e8eaf0;
+    --notice-line: #3d4552;
+    --dbg-bg: #0b0e14;
+    --dbg-fg: #9ece6a;
+  }
+  html[data-theme="ember"] {
+    --bg: #1c1410;
+    --bg-hover: #2c1e16;
+    --bg-deep: #140e0a;
+    --fg: #eadcc8;
+    --fg-bright: #fff6e8;
+    --fg-dim: #9a7d5c;
+    --accent: #e8a04a;
+    --line: #3d2c20;
+    --badge-ink: #1a1208;
+    --notice-bg: #3a2a1c;
+    --notice-fg: #f0e4d0;
+    --notice-line: #5c4630;
+    --dbg-bg: #120e0b;
+    --dbg-fg: #d4c070;
+  }
+  html[data-theme="tide"] {
+    --bg: #0e181a;
+    --bg-hover: #162428;
+    --bg-deep: #0a1214;
+    --fg: #c8ddd8;
+    --fg-bright: #e8fffa;
+    --fg-dim: #5e7a76;
+    --accent: #3ecfb2;
+    --line: #1c3034;
+    --badge-ink: #061210;
+    --notice-bg: #1a2c30;
+    --notice-fg: #d4eeea;
+    --notice-line: #2a484c;
+    --dbg-bg: #0a1012;
+    --dbg-fg: #6ee0c4;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -44,13 +84,13 @@
   #brand { font-weight: 600; letter-spacing: .3px; white-space: nowrap; }
   #badge {
     margin-left: auto; font-size: 9px; letter-spacing: .5px;
-    color: #0d1017; background: var(--accent);
+    color: var(--badge-ink); background: var(--accent);
     padding: 2px 5px; border-radius: 3px; white-space: nowrap;
   }
 
   #wikibar {
     display: flex; gap: 6px; padding: 6px 10px; flex: 0 0 auto;
-    border-bottom: 1px solid var(--line); background: #10131a;
+    border-bottom: 1px solid var(--line); background: var(--bg-deep);
   }
   #wikibar[hidden] { display: none; }
   /* .btn and .sec set their own `display`, which beats the browser's default
@@ -80,8 +120,8 @@
     background: none; border: 0; color: var(--fg);
     font: inherit; text-align: left; cursor: pointer; white-space: nowrap;
   }
-  .btn:hover { background: var(--bg-hover); color: #fff; }
-  .btn.active { background: var(--bg-hover); color: #fff; box-shadow: inset 2px 0 0 var(--accent); }
+  .btn:hover { background: var(--bg-hover); color: var(--fg-bright); }
+  .btn.active { background: var(--bg-hover); color: var(--fg-bright); box-shadow: inset 2px 0 0 var(--accent); }
   .btn .ico { width: 18px; flex: 0 0 auto; text-align: center; font-size: 14px; }
   .btn .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .btn .key { color: var(--fg-dim); font-size: 10px; }
@@ -146,7 +186,7 @@
   #dbg {
     position: fixed; left: 0; right: 0; bottom: 26px;
     margin: 0; padding: 6px 8px; max-height: 46%; overflow: auto;
-    background: #0b0e14; color: #9ece6a; border-top: 1px solid var(--accent);
+    background: var(--dbg-bg); color: var(--dbg-fg); border-top: 1px solid var(--accent);
     font: 10px/1.35 ui-monospace, Consolas, monospace; white-space: pre-wrap;
     word-break: break-all; display: none;
   }
@@ -178,9 +218,9 @@
     z-index: 40;
     padding: 10px 12px;
     border-radius: 6px;
-    background: #2a2f3a;
-    color: #e8eaf0;
-    border: 1px solid #3d4552;
+    background: var(--notice-bg);
+    color: var(--notice-fg);
+    border: 1px solid var(--notice-line);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
     font-size: 12px;
     line-height: 1.45;
@@ -479,6 +519,7 @@
       }
       var gs = document.getElementById("game-size");
       if (gs) gs.hidden = !isMobile;
+      document.documentElement.setAttribute("data-theme", st.theme || "midnight");
       document.body.setAttribute("data-mobile-half", st.mobileHalf ? "1" : "0");
       var full = document.getElementById("nav-size-full");
       var half = document.getElementById("nav-size-half");

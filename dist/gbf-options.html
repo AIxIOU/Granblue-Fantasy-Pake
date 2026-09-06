@@ -6,14 +6,38 @@
   opening it cannot destroy the wiki or About. Served from tauri://localhost.
 -->
 <style>
-  :root {
+  :root, html[data-theme="midnight"] {
     --bg: #14171f;
     --bg-hover: #1e2330;
     --fg: #c9d1e0;
+    --fg-bright: #ffffff;
     --fg-dim: #6b7688;
     --accent: #7aa2f7;
     --line: #232838;
     --gold: #f2e2b6;
+    --badge-ink: #0d1017;
+  }
+  html[data-theme="ember"] {
+    --bg: #1c1410;
+    --bg-hover: #2c1e16;
+    --fg: #eadcc8;
+    --fg-bright: #fff6e8;
+    --fg-dim: #9a7d5c;
+    --accent: #e8a04a;
+    --line: #3d2c20;
+    --gold: #f4d08a;
+    --badge-ink: #1a1208;
+  }
+  html[data-theme="tide"] {
+    --bg: #0e181a;
+    --bg-hover: #162428;
+    --fg: #c8ddd8;
+    --fg-bright: #e8fffa;
+    --fg-dim: #5e7a76;
+    --accent: #3ecfb2;
+    --line: #1c3034;
+    --gold: #a8e6d8;
+    --badge-ink: #061210;
   }
   [hidden] { display: none !important; }
   html, body {
@@ -34,7 +58,7 @@
   }
   .badge {
     display: inline-block; font: 9px/1.2 -apple-system, "Segoe UI", sans-serif;
-    letter-spacing: .5px; color: #0d1017; background: var(--accent);
+    letter-spacing: .5px; color: var(--badge-ink); background: var(--accent);
     padding: 2px 5px; border-radius: 3px; vertical-align: middle;
   }
   p.lede { color: var(--fg-dim); margin: 0 0 16px; }
@@ -55,8 +79,19 @@
     box-shadow: inset 3px 0 0 var(--accent);
     background: var(--bg-hover);
   }
-  .choice b { display: block; margin-bottom: 2px; color: #fff; }
+  .choice b { display: block; margin-bottom: 2px; color: var(--fg-bright); }
   .choice span { color: var(--fg-dim); font-size: 12px; }
+  #opt-theme {
+    display: block; width: 100%;
+    margin: 0 0 8px; padding: 10px 12px;
+    background: var(--bg-hover); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px;
+    font: inherit; cursor: pointer;
+  }
+  #opt-theme:hover, #opt-theme:focus {
+    border-color: var(--accent); outline: none;
+  }
+  #opt-theme option { background: var(--bg); color: var(--fg); }
 </style>
 <div id="gbf-options-body">
   <h1>Options <span class="badge">NATIVE</span></h1>
@@ -76,6 +111,15 @@
     <span>Game, then the panel, then the sidebar.</span>
   </button>
   </div>
+
+  <h2>Chrome theme</h2>
+  <p class="lede">Colors the sidebar, Options, and About. Granblue and the
+  wiki keep their own look.</p>
+  <select id="opt-theme" aria-label="Chrome theme">
+    <option value="midnight">Midnight</option>
+    <option value="ember">Ember</option>
+    <option value="tide">Tide</option>
+  </select>
 
   <h2>Granblue client</h2>
   <button type="button" class="choice" id="opt-mobile">
@@ -104,20 +148,30 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside, tray, desktopClient) {
+  function paint(outside, tray, desktopClient, theme) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
     document.getElementById("opt-tray").classList.toggle("on", !!tray);
     document.getElementById("opt-mobile").classList.toggle("on", !desktopClient);
     document.getElementById("opt-desktop").classList.toggle("on", !!desktopClient);
+    var t = theme || "midnight";
+    document.documentElement.setAttribute("data-theme", t);
+    var sel = document.getElementById("opt-theme");
+    if (sel && sel.value !== t) sel.value = t;
   }
   var trayOn = false;
   var desktopOn = false;
+  var themeOn = "midnight";
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn); });
+  });
+  document.getElementById("opt-theme").addEventListener("change", function () {
+    themeOn = document.getElementById("opt-theme").value || "midnight";
+    document.documentElement.setAttribute("data-theme", themeOn);
+    invoke("gbf_set_theme", { theme: themeOn }).catch(function () {});
   });
   document.getElementById("opt-tray").addEventListener("click", function () {
     invoke("gbf_set_tray", { on: !trayOn });
@@ -137,7 +191,8 @@
       st = st || {};
       trayOn = !!st.tray;
       desktopOn = !!st.desktopClient;
-      paint(!!st.wikiOutside, trayOn, desktopOn);
+      themeOn = st.theme || "midnight";
+      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn);
     }
   };
   // Ask for our own state on load rather than waiting to be told.
