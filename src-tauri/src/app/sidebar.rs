@@ -2946,9 +2946,6 @@ pub fn gbf_game_edge(
     let hash_changed = hash
         .map(|h| state.set_game_hash(&label, h))
         .unwrap_or(false);
-    if let Some(m) = mobile {
-        state.set_mobile(&label, m);
-    }
     let dpr = dpr.filter(|v| *v > 0.05).unwrap_or(0.0);
     let overlay = overlay.unwrap_or(0.0);
     let zoom = zoom.filter(|v| *v > 0.05).unwrap_or(0.0);
@@ -2966,6 +2963,15 @@ pub fn gbf_game_edge(
             });
         }
         return Ok(());
+    }
+    // Only past the guard above. `mobile` is reported as "no #submenu", so a
+    // report from a half-built document would claim the DESKTOP client is the
+    // mobile one -- and it used to be latched BEFORE that guard, on the one
+    // path that returns without a layout to correct it. Whether Granblue can
+    // actually build #wrapper before #submenu was not proven either way; this
+    // costs nothing and removes the question.
+    if let Some(m) = mobile {
+        state.set_mobile(&label, m);
     }
     let current_edge = state.game_edge(&label);
     let same_edge = (current_edge - right).abs() < 0.5;
@@ -2998,16 +3004,14 @@ pub fn gbf_game_edge(
     // mobage_fixwindowsize === 0 always, so it is never either switch.
     let desktop = !state.is_mobile(&label);
     let went_native = automatic && !prev_auto && desktop;
-    let left_native = !automatic && prev_auto && desktop;
     if went_native {
         // State only -- we are not guaranteed to be on the main thread; the
         // `layout` below hides the webviews.
         let _ = state.close_panels_for_automatic(&label);
     }
-    // Crossing either way is handled by `sync_lock_css` inside the `layout`
-    // below: it pushes the CSS only when the page's copy does not match, so
-    // it does not matter which of the reload and the report lands first.
-    let _ = left_native;
+    // Leaving native mode needs nothing here: `sync_lock_css` inside the
+    // `layout` below pushes the CSS only when the page's copy does not match,
+    // so it does not matter which of the reload and the report lands first.
     let handle = app.clone();
     let win_label = label;
     app.run_on_main_thread(move || {
