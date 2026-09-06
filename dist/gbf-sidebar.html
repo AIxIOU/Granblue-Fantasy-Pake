@@ -558,7 +558,7 @@
         l.classList.toggle("active", !isMobile && !!st.locked);
       }
       var gs = document.getElementById("game-size");
-      if (gs) gs.hidden = !isMobile;
+      if (gs) gs.hidden = !isMobile || !!st.gameSizesItself;
       document.documentElement.setAttribute("data-theme", st.theme || "midnight");
       document.body.setAttribute("data-mobile-half", st.mobileHalf ? "1" : "0");
       var full = document.getElementById("nav-size-full");

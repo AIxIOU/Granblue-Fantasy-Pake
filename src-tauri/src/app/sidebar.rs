@@ -878,6 +878,16 @@ fn split(
 /// Ignore leftover smaller than this when hugging (rounding / DPI).
 const HUG_SLACK: f64 = 8.0;
 
+/// DIAGNOSTIC 2026-09-05: Granblue sizes itself.
+///
+/// Pendant Trade quantity dropdowns (and other selects inside popups) did not
+/// receive clicks while we zoomed the game webview to Large (2.0). Before a
+/// real fix, stop driving the game's size: no webview zoom, no hug/snap of the
+/// window or the game column to `#wrapper`. The leftover after sidebar/panels
+/// is just a viewport. Flip this off once the dropdown is confirmed or ruled
+/// out as a zoom/size symptom.
+const GAME_SIZES_ITSELF: bool = true;
+
 /// CSS pixels in the game webview → window logical pixels.
 ///
 /// WebView2's `devicePixelRatio` is not the OS window `scale_factor`. Treating
@@ -905,6 +915,9 @@ fn snap_css(state: &SidebarState, label: &str) -> f64 {
 /// Locked: `#wrapper`'s right edge. Unlocked: the submenu overlay's right
 /// edge so the sidebar sits on Chat/Settings, collapsed or expanded.
 fn column_x(host: &Window, s: &Split) -> f64 {
+    if GAME_SIZES_ITSELF {
+        return s.game_w;
+    }
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label();
     let css = snap_css(&state, label);
@@ -916,6 +929,9 @@ fn column_x(host: &Window, s: &Split) -> f64 {
 
 /// Locked: shrink/grow the OS window so its right edge sits on the sidebar.
 fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
+    if GAME_SIZES_ITSELF {
+        return Ok(false);
+    }
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
     if snap_css(&state, &label) <= 1.0 {
@@ -1000,12 +1016,20 @@ fn apply_mobile_zoom(host: &Window) -> Option<String> {
     if !state.is_mobile(&label) {
         return None;
     }
-    let target = if state.is_mobile_half() { 1.0 } else { 2.0 };
+    let game = game_webview(host)?;
+    // Diagnostic: leave zoom at 1 so Granblue's own layout is what you see.
+    // A leftover Large 2.0 from the previous build is cleared once.
+    let target = if GAME_SIZES_ITSELF {
+        1.0
+    } else if state.is_mobile_half() {
+        1.0
+    } else {
+        2.0
+    };
     let current = state.page_zoom(&label);
     if (target - current).abs() < 0.01 {
         return None;
     }
-    let game = game_webview(host)?;
     match game.set_zoom(target) {
         Ok(()) => {
             state.set_page_zoom(&label, target);
@@ -1443,8 +1467,8 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
 
     let scale = host.scale_factor()?;
     let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
-    let lock_fill = locked && edge > 1.0;
-    let unlock_snap = !locked && snap_css(&state, &label) > 1.0;
+    let lock_fill = !GAME_SIZES_ITSELF && locked && edge > 1.0;
+    let unlock_snap = !GAME_SIZES_ITSELF && !locked && snap_css(&state, &label) > 1.0;
     let panel_open = wiki_open || about_open || options_open;
     // Unlocked: tile to the submenu overlay so Chat/Settings is flush with the
     // sidebar. A panel is always a sibling column.
@@ -1565,7 +1589,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF}}})"
             ));
             // show() is enough after desktop Automatic hid the rail. hide()
             // then show() blanks WebView2 white on every layout, twice when
@@ -1917,7 +1941,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .page_zoom(window.label());
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\ntheme={theme}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\ntheme={theme}\ngame_sizes_itself={GAME_SIZES_ITSELF}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
