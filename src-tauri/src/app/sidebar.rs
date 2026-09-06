@@ -1072,6 +1072,19 @@ fn apply_mobile_zoom(host: &Window) -> Option<String> {
     match game.set_zoom(target) {
         Ok(()) => {
             state.set_page_zoom(&label, target);
+            // Make the page re-report, because the zoom we just set CHANGES
+            // its devicePixelRatio -- and the column is derived from that dpr.
+            //
+            // Without this the column keeps whatever dpr was last reported,
+            // which at a cold start is mid-transition: the game webview came
+            // out 474 physical instead of 721, page clipped at vw=211 against
+            // a 320 layout, black from there to the sidebar. Nothing else ever
+            // asked, so it stayed that way.
+            //
+            // __gbfSetHug bursts reports for ~2s; the first one carrying a
+            // changed dpr re-runs layout, which recomputes the column from the
+            // settled value.
+            let _ = game.eval("window.__gbfSetHug && window.__gbfSetHug(true)");
             Some(format!("mobile zoom {current:.2} -> {target:.2}\n"))
         }
         Err(e) => Some(format!("mobile zoom ERR {e}\n")),

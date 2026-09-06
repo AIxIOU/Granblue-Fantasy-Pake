@@ -32,8 +32,9 @@
 
   function invoke(cmd, args) {
     var t = window.__TAURI__;
-    if (!t || !t.core || !t.core.invoke) return;
+    if (!t || !t.core || !t.core.invoke) return false;
     t.core.invoke(cmd, args || {});
+    return true;
   }
 
   document.addEventListener(
@@ -59,16 +60,27 @@
         invoke("gbf_toggle_sidebar");
         return;
       }
-      // Same as main (exception 5): reload and back apply to whichever
-      // webview has focus — game, wiki, About, or Options — not the OS window.
+      // Reload and Back drive GRANBLUE, from whichever webview has focus.
+      //
+      // These are the Reload and Back BUTTONS' shortcuts, and those buttons
+      // drive the game, so the keys must mean the same thing everywhere. They
+      // used to act on the focused document instead: from About or Options
+      // that reloaded a static local page and stepped a history with nothing
+      // in it, so the keys looked dead there. The sidebar had the identical
+      // bug in its own copy of this handler.
+      //
+      // The WIKI is the one place the fallback matters. It is an external
+      // site with no Tauri IPC, so `invoke` cannot reach Rust there -- and
+      // reloading or stepping back the wiki itself is exactly what a reader
+      // wants, so that is what it falls back to.
       if (e.key === "r" || e.key === "R") {
         e.preventDefault();
-        location.reload();
+        if (!invoke("gbf_game_reload")) location.reload();
         return;
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        history.back();
+        if (!invoke("gbf_game_back")) history.back();
         return;
       }
       var hash = HASH[e.key];
