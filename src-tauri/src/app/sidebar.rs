@@ -1477,23 +1477,39 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     }
 
     let col = column_x(host, &s);
-    // On MOBILE the game column is ours to choose, not something to read back
-    // from Granblue.
+    // On MOBILE the game column is the GAME'S OWN WIDTH, and nothing else.
     //
-    // `column_x` derives the column from GBF's reported `#wrapper` edge times
-    // the dpr it reported with it -- and at startup that dpr arrives BEFORE
-    // our page zoom lands, so the column comes out at a fraction of its real
-    // width. 320 css x 0.966 dpr / 1.104 scale = 280 logical = 309 physical,
-    // which is exactly how wide the game webview was left, with a black gap
-    // from there to the sidebar at 721 (screenshot 2026-09-06).
+    // Not `column_x`'s reading of GBF's edge: that multiplies by the dpr GBF
+    // reported with it, and at startup that dpr lands BEFORE our page zoom, so
+    // the column came out 309 physical instead of 721 and left a black gap to
+    // the sidebar.
     //
-    // That race was always there; it was invisible while the game took the
-    // whole frame, and narrowing the game to its column exposed it. Reading
-    // the width back is the wrong shape for this client anyway: the mobile
-    // layout is a fixed 320 css px at a zoom WE set, so the column is simply
-    // the frame minus our own chrome. `split()` already computes exactly that
-    // and clamps it to MIN_GAME_WIDTH, so it cannot collapse.
-    let col = if mobile { s.game_w } else { col };
+    // And not the frame's leftover either: `apply_layout` places the webviews
+    // BEFORE the hug shrinks the frame, so on a Wiki -> About/Options switch
+    // the frame is still wiki-wide and "leftover" is ~1527 physical -- the
+    // game webview stretched to that while its page still filled only 721,
+    // black to the sidebar again. Both were mine; both had the same shape,
+    // a column derived from something that is not the game.
+    //
+    // The mobile client is a fixed `MIN_GAME_WIDTH` css layout at a zoom WE
+    // set, so the column is that width in window logical px. `game_dpr` gives
+    // it exactly once GBF has reported post-zoom; the floor covers the window
+    // before that, using the zoom we set ourselves.
+    //
+    // Deliberately NOT capped by the frame's leftover. Capping it deadlocks:
+    // switching Small -> Large leaves the frame at the Small width for one
+    // pass, the cap squeezes the column to fit that, and the hug then targets
+    // the squeezed column -- so the frame never grows back and the game stays
+    // clipped at a 160px viewport. The column states the width the game needs
+    // and the hug grows the frame to it; `split()` already stops the sidebar
+    // squeezing the game below MIN_GAME_WIDTH from the other side.
+    let col = if mobile {
+        let natural = css_to_window_logical(host, MIN_GAME_WIDTH, state.game_dpr(&label));
+        let floor = MIN_GAME_WIDTH * state.page_zoom(&label).max(1.0);
+        natural.max(floor)
+    } else {
+        col
+    };
     let edge = state.game_edge(&label);
     let want_w = col + s.wiki_w + s.sidebar_w;
 
