@@ -330,6 +330,7 @@ pub fn run_app() {
             app::sidebar::gbf_panel_state,
             app::sidebar::gbf_set_wiki_outside,
             app::sidebar::gbf_set_theme,
+            app::sidebar::gbf_set_sidebar_debug,
             app::sidebar::gbf_set_desktop_client,
             app::sidebar::gbf_set_mobile_half,
             app::setup::gbf_set_tray,
@@ -354,6 +355,9 @@ pub fn run_app() {
             let theme = app::sidebar::restore_layout_theme(app.app_handle());
             app.state::<app::sidebar::SidebarState>()
                 .set_theme(&theme);
+            let sidebar_debug = app::sidebar::restore_layout_sidebar_debug(app.app_handle());
+            app.state::<app::sidebar::SidebarState>()
+                .set_sidebar_debug(sidebar_debug);
             app.manage(TrayRuntime {
                 icon_path: tray_icon_path.clone(),
                 init_fullscreen,

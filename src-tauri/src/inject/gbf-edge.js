@@ -80,6 +80,7 @@
       dpr: window.devicePixelRatio || 1,
       zoom: zoom,
       mobile: !desktopClient(),
+      hash: location.hash || "",
     });
     // Rust now knows it is the native mode. Report nothing further and stop
     // watching the page; the poll below is all that is left of us.
@@ -152,7 +153,10 @@
     ro = new ResizeObserver(schedule);
     attach();
     document.addEventListener("DOMContentLoaded", attach);
-    document.addEventListener("hashchange", function () {
+    // hashchange is a window event (it does not bubble). In-game menu
+    // clicks change location.hash without resizing #wrapper, so this is
+    // how the sidebar highlight follows Granblue's own navigation.
+    window.addEventListener("hashchange", function () {
       setTimeout(attach, 50);
       schedule();
     });

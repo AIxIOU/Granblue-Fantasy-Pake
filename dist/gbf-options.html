@@ -141,6 +141,13 @@
     <span>Icon in the notification area. Off by default. With it off,
     closing the window quits.</span>
   </button>
+
+  <h2>Sidebar</h2>
+  <button type="button" class="choice" id="opt-debug">
+    <b>Bottom debugger</b>
+    <span>Diagnostics strip under Back and Reload. Click the strip to
+    expand the dump. Off by default.</span>
+  </button>
 </div>
 <script>
   function invoke(cmd, args) {
@@ -148,12 +155,13 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside, tray, desktopClient, theme) {
+  function paint(outside, tray, desktopClient, theme, sidebarDebug) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
     document.getElementById("opt-tray").classList.toggle("on", !!tray);
     document.getElementById("opt-mobile").classList.toggle("on", !desktopClient);
     document.getElementById("opt-desktop").classList.toggle("on", !!desktopClient);
+    document.getElementById("opt-debug").classList.toggle("on", !!sidebarDebug);
     var t = theme || "midnight";
     document.documentElement.setAttribute("data-theme", t);
     var sel = document.getElementById("opt-theme");
@@ -162,11 +170,12 @@
   var trayOn = false;
   var desktopOn = false;
   var themeOn = "midnight";
+  var debugOn = false;
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn); });
   });
   document.getElementById("opt-theme").addEventListener("change", function () {
     themeOn = document.getElementById("opt-theme").value || "midnight";
@@ -175,6 +184,9 @@
   });
   document.getElementById("opt-tray").addEventListener("click", function () {
     invoke("gbf_set_tray", { on: !trayOn });
+  });
+  document.getElementById("opt-debug").addEventListener("click", function () {
+    invoke("gbf_set_sidebar_debug", { on: !debugOn });
   });
   // Switching client restarts the app: a webview's user agent can only be set
   // when it is built.
@@ -192,7 +204,8 @@
       trayOn = !!st.tray;
       desktopOn = !!st.desktopClient;
       themeOn = st.theme || "midnight";
-      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn);
+      debugOn = !!st.sidebarDebug;
+      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn);
     }
   };
   // Ask for our own state on load rather than waiting to be told.

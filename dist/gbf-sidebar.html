@@ -211,6 +211,9 @@
     flex: 0 0 auto; border-top: 1px solid var(--line);
     padding: 7px 12px; font-size: 10px; color: var(--fg-dim); white-space: nowrap;
   }
+  /* Hidden unless Options turns the bottom debugger on. */
+  body:not(.debug) #foot,
+  body:not(.debug) #dbg { display: none !important; }
 
   /* Collapsed: icons only. Because this is a separate document, collapsing
      changes nothing about the game's own layout -- Rust just makes the webview
@@ -369,7 +372,7 @@
     if (!t.core || !t.core.invoke) { say("__TAURI__: " + Object.keys(t).join(",")); return; }
     say("ipc ready — click here for diagnostics");
     window.refreshDebug = refreshDebug;
-    refreshDebug();
+    if (document.body.classList.contains("debug")) refreshDebug();
     var f = document.getElementById("foot");
     if (f) {
       f.style.cursor = "pointer";
@@ -408,6 +411,7 @@
     b.appendChild(key);
 
     if (item.id) b.id = item.id;
+    if (item.hash) b.setAttribute("data-hash", item.hash);
     b.addEventListener("click", function () {
       if (item.cmd) {
         say(item.label + "…");
@@ -524,6 +528,27 @@
       .catch(function (e) { say("toggle FAILED: " + (e && e.message ? e.message : e)); });
   });
 
+  // Same longest-prefix rule as shipping markActive(): #quest/assist lights
+  // Raids, not Quests. Hash is read from the game webview; this page never
+  // writes Granblue.
+  function markGameHash(h) {
+    h = h || "";
+    var best = null;
+    var buttons = document.querySelectorAll("#nav .btn[data-hash]");
+    for (var i = 0; i < buttons.length; i++) {
+      var b = buttons[i];
+      b.classList.remove("active");
+      var bh = b.getAttribute("data-hash") || "";
+      if (!bh) continue;
+      if (h === bh || h.indexOf(bh + "/") === 0) {
+        if (!best || bh.length > (best.getAttribute("data-hash") || "").length) {
+          best = b;
+        }
+      }
+    }
+    if (best) best.classList.add("active");
+  }
+
   // Rust owns the collapsed flag and pushes it here after every relayout, so
   // there is only ever one source of truth for it.
   // Rust owns both flags and pushes them here after every relayout, so there
@@ -565,7 +590,21 @@
       var half = document.getElementById("nav-size-half");
       if (full) full.classList.toggle("active", isMobile && !st.mobileHalf);
       if (half) half.classList.toggle("active", isMobile && !!st.mobileHalf);
+      if (Object.prototype.hasOwnProperty.call(st, "sidebarDebug")) {
+        document.body.classList.toggle("debug", !!st.sidebarDebug);
+        if (!st.sidebarDebug) {
+          var dbg = document.getElementById("dbg");
+          if (dbg) dbg.className = "";
+        } else {
+          refreshDebug();
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(st, "gameHash")) {
+        markGameHash(st.gameHash);
+      }
     },
+
+    setGameHash: markGameHash,
 
     notice: showNotice,
     // Kept so an older Rust build still works against this page.

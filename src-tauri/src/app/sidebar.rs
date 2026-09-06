@@ -268,6 +268,9 @@ struct SavedLayout {
     /// Missing or unknown = midnight (the original palette).
     #[serde(default)]
     theme: String,
+    /// Sidebar footer diagnostics strip. Process-wide. Default false.
+    #[serde(default)]
+    sidebar_debug: bool,
 }
 
 fn default_wiki_outside() -> bool {
@@ -310,6 +313,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 desktop_client: sidebar.is_desktop_client(),
                 mobile_half: sidebar.is_mobile_half(),
                 theme: sidebar.theme(),
+                sidebar_debug: sidebar.is_sidebar_debug(),
             },
         );
     }
@@ -393,6 +397,16 @@ pub fn restore_layout_theme(app: &AppHandle) -> String {
     normalize_theme(raw)
 }
 
+/// Sidebar footer dump. Process-wide, like the tray flag. Default off.
+pub fn restore_layout_sidebar_debug(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.sidebar_debug)
+        .or_else(|| states.values().next().map(|s| s.sidebar_debug))
+        .unwrap_or(false)
+}
+
 #[derive(Default, Clone, Copy)]
 struct WindowFlags {
     collapsed: bool,
@@ -460,6 +474,12 @@ pub struct SidebarState {
     mobile_half: AtomicBool,
     /// Process-wide. Sidebar / Options / About palette. Empty = midnight.
     theme: Mutex<String>,
+    /// Sidebar footer diagnostics. Process-wide. Default off.
+    sidebar_debug: AtomicBool,
+    /// Last `location.hash` read from the game webview. RAM only; used to
+    /// highlight the matching sidebar nav row (same longest-prefix rule as
+    /// shipping `markActive`).
+    game_hash: Mutex<HashMap<String, String>>,
 }
 
 impl SidebarState {
@@ -505,6 +525,27 @@ impl SidebarState {
     pub fn set_theme(&self, theme: &str) {
         let mut guard = self.theme.lock().unwrap_or_else(|e| e.into_inner());
         *guard = normalize_theme(theme);
+    }
+
+    pub fn is_sidebar_debug(&self) -> bool {
+        self.sidebar_debug.load(Ordering::Relaxed)
+    }
+
+    pub fn set_sidebar_debug(&self, on: bool) {
+        self.sidebar_debug.store(on, Ordering::Relaxed);
+    }
+
+    fn game_hash(&self, label: &str) -> String {
+        let guard = self.game_hash.lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(label).cloned().unwrap_or_default()
+    }
+
+    /// Returns true when the stored hash changed.
+    fn set_game_hash(&self, label: &str, hash: String) -> bool {
+        let mut guard = self.game_hash.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = guard.get(label).map(|old| old != &hash).unwrap_or(true);
+        guard.insert(label.to_string(), hash);
+        changed
     }
 
     pub fn is_collapsed(&self, label: &str) -> bool {
@@ -1393,6 +1434,8 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let mobile_half = state.is_mobile_half();
     let theme = state.theme();
     let theme_js = theme_js(&theme);
+    let sidebar_debug = state.is_sidebar_debug();
+    let hash_js = serde_json::to_string(&state.game_hash(&label)).unwrap_or_else(|_| "\"\"".into());
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
@@ -1575,7 +1618,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             // also asks gbf_panel_state on load because this eval can race
             // the About→Options navigation.
             let e = panel.eval(format!(
-                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js}}})"
+                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug}}})"
             ));
             out.push_str(&format!("panel eval={}\n", result_word(&e)));
         }
@@ -1587,7 +1630,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF},sidebarDebug:{sidebar_debug},gameHash:{hash_js}}})"
             ));
             // show() is enough after desktop Automatic hid the rail. hide()
             // then show() blanks WebView2 white on every layout, twice when
@@ -1671,6 +1714,22 @@ fn bounds_word(w: &Webview) -> String {
         (Ok(p), Ok(s)) => format!("{},{} {}x{}", p.x, p.y, s.width, s.height),
         _ => "unreadable".to_string(),
     }
+}
+
+/// Push the game's current hash to the sidebar so the matching nav row lights
+/// up. Read-only: we never write Granblue's location here.
+fn push_sidebar_game_hash(host: &Window) {
+    let Some(bar) = sidebar_webview(host) else {
+        return;
+    };
+    let hash = host
+        .app_handle()
+        .state::<SidebarState>()
+        .game_hash(host.label());
+    let encoded = serde_json::to_string(&hash).unwrap_or_else(|_| "\"\"".into());
+    let _ = bar.eval(format!(
+        "window.__gbfSidebar && window.__gbfSidebar.setGameHash({encoded})"
+    ));
 }
 
 /// Add the sidebar webview beside the game and keep it laid out.
@@ -1765,7 +1824,13 @@ pub fn gbf_nav(window: Window, hash: String) -> Result<(), String> {
         .ok_or_else(|| format!("no game webview labelled '{}'", window.label()))?;
     let encoded = serde_json::to_string(&hash).map_err(|e| e.to_string())?;
     game.eval(format!("location.hash = {encoded}"))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    window
+        .app_handle()
+        .state::<SidebarState>()
+        .set_game_hash(window.label(), hash);
+    push_sidebar_game_hash(&window);
+    Ok(())
 }
 
 /// Game history back. Same as the shipping sidebar's Back: `history.back()`
@@ -1937,9 +2002,17 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
         .app_handle()
         .state::<SidebarState>()
         .page_zoom(window.label());
+    let game_hash = window
+        .app_handle()
+        .state::<SidebarState>()
+        .game_hash(window.label());
+    let sidebar_debug = window
+        .app_handle()
+        .state::<SidebarState>()
+        .is_sidebar_debug();
 
     let report = format!(
-        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\ntheme={theme}\ngame_sizes_itself={GAME_SIZES_ITSELF}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
+        "window={}\nsidebar={}\nwebviews:\n  {}\nwebview_windows()={wv:?}\nwindows()={wins:?}\nscale={scale:.3}\ndpr={dpr:.3}\nphysical={}x{}\nlogical={:.0}x{:.0}\ncollapsed={collapsed}\nlocked={locked}\nautomatic={automatic}\nmobile={mobile}\nmobile_half={mobile_half}\ndesktop_client={desktop_client}\npage_zoom={page_zoom:.3}\nedge={edge:.0}\noverlay={overlay_edge:.0}\nhug_busy={hug_busy}\ngame_zoom={game_zoom:.3}\nwiki_open={wiki_open}\nabout_open={about_open}\noptions_open={options_open}\nwiki_panel={wiki_panel:.0}\nwiki_outside={wiki_outside}\ntray={tray}\ntray_icon={tray_icon}\ntheme={theme}\ngame_sizes_itself={GAME_SIZES_ITSELF}\ngame_hash={game_hash}\nsidebar_debug={sidebar_debug}\nmonitor={monitor:.0}\npersist={persist}\nlayout_persist={layout_persist}",
         window.label(),
         sidebar_label(window.label()),
         bounds.join("\n  "),
@@ -2500,7 +2573,17 @@ pub fn on_game_page_finished(webview: &Webview, url: &Url) {
     let host_name = url.host_str().unwrap_or("");
     let on_gbf = host_name.contains("granbluefantasy");
     if on_gbf {
+        if let Some(frag) = url.fragment() {
+            webview
+                .app_handle()
+                .state::<SidebarState>()
+                .set_game_hash(&webview.window().label().to_string(), format!("#{frag}"));
+        }
         reapply_lock(webview);
+        if let Some(host) = webview.app_handle().get_window(webview.window().label()) {
+            push_sidebar_game_hash(&host);
+        }
+        let _ = webview.eval("window.__gbfReportEdge && window.__gbfReportEdge()");
         return;
     }
     let label = webview.window().label().to_string();
@@ -2672,6 +2755,7 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
         "desktopClient": state.is_desktop_client(),
         "mobile": state.is_mobile(label),
         "theme": state.theme(),
+        "sidebarDebug": state.is_sidebar_debug(),
     }))
 }
 
@@ -2712,6 +2796,31 @@ pub fn gbf_set_theme(window: Window, theme: String) -> Result<String, String> {
     Ok(report)
 }
 
+/// Show or hide the sidebar's bottom diagnostics strip.
+#[tauri::command]
+pub fn gbf_set_sidebar_debug(window: Window, on: bool) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    app.state::<SidebarState>().set_sidebar_debug(on);
+    persist_layout_state(&app);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = window.label().to_string();
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            Some(host) => layout_verbose(&host),
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    Ok(format!("sidebar_debug={on}\n{report}"))
+}
+
 #[tauri::command]
 pub fn gbf_set_wiki_outside(window: Window, outside: bool) -> Result<String, String> {
     let app = window.app_handle().clone();
@@ -2750,10 +2859,14 @@ pub fn gbf_game_edge(
     overlay: Option<f64>,
     zoom: Option<f64>,
     mobile: Option<bool>,
+    hash: Option<String>,
 ) -> Result<(), String> {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
     let state = app.state::<SidebarState>();
+    let hash_changed = hash
+        .map(|h| state.set_game_hash(&label, h))
+        .unwrap_or(false);
     if let Some(m) = mobile {
         state.set_mobile(&label, m);
     }
@@ -2764,6 +2877,15 @@ pub fn gbf_game_edge(
         // Reload removes #wrapper for a moment. Keep the last edge instead
         // of snapping the sidebar to x=0.
         state.set_game_zoom(&label, 0.0);
+        if hash_changed {
+            let handle = app.clone();
+            let win_label = label;
+            let _ = app.run_on_main_thread(move || {
+                if let Some(host) = handle.get_window(&win_label) {
+                    push_sidebar_game_hash(&host);
+                }
+            });
+        }
         return Ok(());
     }
     let current_edge = state.game_edge(&label);
@@ -2780,6 +2902,15 @@ pub fn gbf_game_edge(
         state.set_game_zoom(&label, zoom);
     }
     if same_edge && same_overlay && same_auto && same_dpr {
+        if hash_changed {
+            let handle = app.clone();
+            let win_label = label;
+            let _ = app.run_on_main_thread(move || {
+                if let Some(host) = handle.get_window(&win_label) {
+                    push_sidebar_game_hash(&host);
+                }
+            });
+        }
         return Ok(());
     }
     state.set_game_edge(&label, right);
