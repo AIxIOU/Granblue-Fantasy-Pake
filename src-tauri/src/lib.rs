@@ -264,7 +264,12 @@ pub fn run_app() {
             // our locked-mode style element with it, so it has to be put back
             // on each load. Cheap, and a no-op when unlocked.
             let label = webview.label();
-            if label == "pake" || label.starts_with("pake-") {
+            // `starts_with("pake-")` is for --multi-window clones (`pake-1`).
+            // It also matches our own children (`pake--gbf-wiki`), so the
+            // game-only check has to be explicit.
+            if (label == "pake" || label.starts_with("pake-"))
+                && app::sidebar::is_game_label(label)
+            {
                 app::sidebar::on_game_page_finished(webview, payload.url());
             }
 

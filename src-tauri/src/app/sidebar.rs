@@ -109,6 +109,18 @@ pub fn wiki_label(window_label: &str) -> String {
     format!("{window_label}--gbf-wiki")
 }
 
+/// True for the GAME webview, false for the sidebar, wiki and panel.
+///
+/// Every child we add is `<window>--gbf-<what>`, and the game webview is the
+/// one whose label IS the window label. This matters because a check of the
+/// shape `label.starts_with("pake-")` -- meant to catch `--multi-window`
+/// clones like `pake-1` -- also matches `pake--gbf-wiki`, and treating one of
+/// our own panels as the game is how the panel-switch flash happened: see
+/// `on_game_page_finished`.
+pub fn is_game_label(label: &str) -> bool {
+    !label.contains("--gbf-")
+}
+
 /// About and Options SHARE one webview.
 ///
 /// They can never be open at once -- opening either closes the other -- they
@@ -913,8 +925,25 @@ fn reserved_panel_w(state: &SidebarState, label: &str, split_panel: f64) -> f64 
     }
 }
 
+/// Exactly the width the three columns occupy. This is the ONE definition of
+/// the frame width when a panel is open, and `maybe_hug_window` targets the
+/// same sum -- they must not drift apart.
+///
+/// They did: this used to add `WIKI_WIDEN_BUFFER` and the hug did not, so
+/// opening a panel sized the frame 2px wider than the columns fill while the
+/// hug wanted it 2px narrower. 2 is inside `HUG_SLACK`, so the hug never
+/// corrected it and the frame simply kept whichever value the last path
+/// produced -- leaving 2px of bare window down the right edge, and a 2px
+/// resize (with the repaint that goes with it) on every panel switch that
+/// crossed between the two paths.
+fn panel_span(game_col: f64, panel: f64, collapsed: bool) -> f64 {
+    game_col + panel + sidebar_want(collapsed)
+}
+
+/// The span plus headroom, for deciding whether a tier FITS. The buffer
+/// belongs in the decision, never in the width we actually ask for.
 fn needed_for_panel(game_col: f64, panel: f64, collapsed: bool) -> f64 {
-    game_col + panel + sidebar_want(collapsed) + WIKI_WIDEN_BUFFER
+    panel_span(game_col, panel, collapsed) + WIKI_WIDEN_BUFFER
 }
 
 fn panel_no_room_notice(mobile: bool) -> String {
@@ -936,6 +965,14 @@ fn fit_inner_width(host: &Window, want: f64, allow_shrink: bool) -> tauri::Resul
     let inner_w = phys.to_logical::<f64>(scale).width;
     let ceiling = monitor_inner_ceiling(host);
     let target = want.min(ceiling).max(1.0);
+    // Same tolerance the hug uses. Without it this resized the frame for a
+    // SINGLE pixel of logical<->physical rounding, so switching between two
+    // panels of the same tier still moved the window -- and every window
+    // resize is a repaint, which is the flash. The hug ignores anything
+    // under HUG_SLACK, so a resize under it can only ever undo itself.
+    if (inner_w - target).abs() <= HUG_SLACK {
+        return Ok(inner_w);
+    }
     let want_phys = (target * scale).round() as u32;
     if want_phys == 0 || want_phys == phys.width {
         return Ok(inner_w);
@@ -1045,7 +1082,9 @@ fn prepare_panel_open(
             });
         }
     };
-    let want = needed_for_panel(game_col, chosen, collapsed || need_collapse);
+    // The span, not the span+buffer: the buffer is for the fits() decision
+    // above. Asking for it here is what left the 2px gap.
+    let want = panel_span(game_col, chosen, collapsed || need_collapse);
     let after = match fit_inner_width(host, want, true) {
         Ok(v) => v,
         Err(e) => {
@@ -1055,10 +1094,23 @@ fn prepare_panel_open(
     };
     let bar = sidebar_want(collapsed || need_collapse);
     let space = (after - game_col - bar).max(0.0);
+    // Reserve the TIER, not the measured leftover.
+    //
+    // `space` is derived from the width the resize actually achieved, which
+    // carries a logical<->physical rounding of its own, so `space.min(prefer)`
+    // made the reserved width depend on HOW the panel was reached: opening
+    // About from the wiki reserved 469.x, opening it from Options reserved
+    // 470. `maybe_hug_window` targets `col + reserved + bar`, so that 1px fed
+    // straight into the frame width and the frame twitched on every switch
+    // between the two paths.
+    //
+    // The tier is the promise -- 470 means 470. `fits()` above has already
+    // checked it against the monitor, so if the frame is a pixel short the
+    // hug grows it rather than the panel quietly shrinking.
     let reserved = if space >= prefer - WIKI_TIER_SLACK {
-        space.min(prefer)
+        prefer
     } else if space >= minimum {
-        space.min(minimum)
+        minimum
     } else {
         0.0
     };
@@ -1194,7 +1246,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     if (wiki_open || about_open || options_open) && panel_min > 0.0 && s.wiki_w + 1.0 >= panel_min {
         let scale = host.scale_factor()?;
         let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
-        let want = col + s.wiki_w + s.sidebar_w + WIKI_WIDEN_BUFFER;
+        let want = col + s.wiki_w + s.sidebar_w;
         let ceiling = monitor_inner_ceiling(host);
         if inner_w + HUG_SLACK < want && want <= ceiling + WIKI_TIER_SLACK {
             let after = grow_inner_width(host, want).unwrap_or(inner_w);
@@ -2163,6 +2215,15 @@ fn hug_js(on: bool) -> String {
 /// Push lock CSS into Granblue, or drop the stale lock overlay on Steam login
 /// and other non-game pages so the sidebar cannot sit on top of them.
 pub fn on_game_page_finished(webview: &Webview, url: &Url) {
+    // Only the game webview. The wiki loads gbf.wiki and the shared panel
+    // navigates between two local pages -- neither is Granblue, so letting
+    // either reach the branch below zeroed the GAME's edge and made the next
+    // layout fall back to a window-derived column. That collapsed the game
+    // column and moved the sidebar on top of it for a few frames on every
+    // panel switch: the flash.
+    if !is_game_label(webview.label()) {
+        return;
+    }
     let host_name = url.host_str().unwrap_or("");
     let on_gbf = host_name.contains("granbluefantasy");
     if on_gbf {
