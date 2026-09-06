@@ -67,9 +67,10 @@ pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
 /// re-fits or reloads when the viewport changes -- see
 /// `GBF_Pake_MOBILE_CLIENT_NOTES.md`. This is the default client.
 ///
-/// On Windows this string is the HTTP request header only. `navigator.userAgent`
-/// stays the desktop Chrome string from `pake.json`, matching Thorium + Speed
-/// Tweaks, so Menu opens `#setting/pc` (Window Size) instead of `#setting/sp`.
+/// Exception 6: this string asks the server for that client. It is not a page
+/// inject and not a Rule 0 traffic rewrite. On Windows it is the HTTP document
+/// header only; `navigator.userAgent` stays the desktop Chrome string from
+/// `pake.json` (Thorium / Speed Tweaks), so Menu opens `#setting/pc`.
 pub const MOBILE_USER_AGENT: &str =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1";
 

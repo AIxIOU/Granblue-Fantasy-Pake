@@ -960,14 +960,19 @@ fn build_window(
     Ok(window)
 }
 
-/// Match Thorium + Speed Tweaks: Granblue document requests see the iOS
-/// User-Agent, while WebView2's own UA (and therefore `navigator.userAgent`)
-/// stays the desktop Chrome string from `pake.json`.
+/// Exception 6 (maintainer, 2026-09-05): not a Rule 0 violation.
 ///
-/// `.user_agent()` cannot split those. Speed Tweaks only rewrites main_frame /
-/// sub_frame; XHR stays desktop so `#setting/pc` can include Window Size.
-/// Filtering every resource type hid that section. Child webviews (wiki /
-/// About / Options) never match these hosts, so they are untouched.
+/// We are asking Cygames for the mobile client. The document `User-Agent` is
+/// how the server picks which Granblue to send. That is not injecting into the
+/// game, not rewriting gameplay traffic, and not changing how the chosen
+/// client then runs. Do not "fix" this filter as a network-rewrite violation.
+///
+/// Thorium / Speed Tweaks: only `main_frame` / `sub_frame` get the iOS header,
+/// so `navigator.userAgent` stays the desktop Chrome string from `pake.json`.
+/// `.user_agent(iOS)` would set both. XHR stays desktop so `#setting/pc` can
+/// include Window Size. Filtering every resource type hid that section and
+/// would be intercepting the session — do not widen the filter. Wiki / About /
+/// Options never match these hosts.
 #[cfg(target_os = "windows")]
 fn attach_request_only_mobile_ua(window: &WebviewWindow, then_navigate: Option<String>) {
     if let Err(error) = window.with_webview(move |webview| {
