@@ -621,6 +621,20 @@
     }
   };
 
+    // Ask for our own state on load rather than waiting to be told.
+  //
+  // This page renders its DESKTOP chrome by default -- Layout, Lock to game,
+  // Back and Reload -- and only hides it inside setState. So any load that is
+  // not followed by a push leaves desktop rows showing on the mobile client.
+  // Asking cannot race; being told can.
+  (function () {
+    var t = window.__TAURI__;
+    if (!t || !t.core || !t.core.invoke) return;
+    t.core.invoke("gbf_panel_state")
+      .then(function (st) { window.__gbfSidebar.setState(st); })
+      .catch(function () {});
+  })();
+
     // Shortcuts also live in gbf-keys.js (game/wiki/about). This copy covers
     // the sidebar document so it does not depend on that script.
     document.addEventListener("keydown", function (e) {
@@ -647,14 +661,30 @@
         .catch(function (er) { say(String(er && er.message ? er.message : er)); });
       return;
     }
+    // Alt+R and Alt+Left drive GRANBLUE, whichever webview has focus. That is
+    // what they already do from the game webview via gbf-keys.js, and the
+    // shortcut should not change meaning depending on where the caret is.
+    //
+    // They used to call location.reload() / history.back() on THIS document.
+    // Alt+R therefore reloaded the SIDEBAR, which came back showing its
+    // desktop chrome -- Layout, Lock, Back, Reload -- because that is only
+    // hidden inside setState and no push followed the reload. Alt+Left did
+    // nothing at all, the sidebar having no history to step back through.
+    //
+    // Not gated on mobile: the BUTTONS are hidden there, but the keys behave
+    // the same from every webview, which is what the About page promises.
     if (e.key === "r" || e.key === "R") {
       e.preventDefault();
-      location.reload();
+      invoke("gbf_game_reload")
+        .then(function () { say("reload ok"); })
+        .catch(function (er) { say(String(er && er.message ? er.message : er)); });
       return;
     }
     if (e.key === "ArrowLeft") {
       e.preventDefault();
-      history.back();
+      invoke("gbf_game_back")
+        .then(function () { say("back ok"); })
+        .catch(function (er) { say(String(er && er.message ? er.message : er)); });
       return;
     }
     var hit = null;

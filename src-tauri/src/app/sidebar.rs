@@ -535,7 +535,7 @@ impl SidebarState {
         self.sidebar_debug.store(on, Ordering::Relaxed);
     }
 
-    fn game_hash(&self, label: &str) -> String {
+    pub fn game_hash(&self, label: &str) -> String {
         let guard = self.game_hash.lock().unwrap_or_else(|e| e.into_inner());
         guard.get(label).cloned().unwrap_or_default()
     }
@@ -2809,6 +2809,19 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
         "mobile": state.is_mobile(label),
         "theme": state.theme(),
         "sidebarDebug": state.is_sidebar_debug(),
+        // The rest of what `setState` carries, so the SIDEBAR can ask for its
+        // own state on load instead of waiting to be told. It renders its
+        // desktop chrome by default and only hides it inside `setState`, so a
+        // sidebar that reloads with no push showed Layout and Back/Reload on
+        // the mobile client until the next relayout.
+        "collapsed": state.is_collapsed(label),
+        "locked": state.is_locked(label),
+        "mobileHalf": state.is_mobile_half(),
+        "gameSizesItself": GAME_SIZES_ITSELF,
+        "wikiOpen": state.wiki_is_open(label),
+        "aboutOpen": state.about_is_open(label),
+        "optionsOpen": state.options_is_open(label),
+        "gameHash": state.game_hash(label),
     }))
 }
 
