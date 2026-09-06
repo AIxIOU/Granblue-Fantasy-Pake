@@ -66,6 +66,10 @@ pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
 /// It has no `#submenu` chat column, lays out at a fixed 320 CSS px, and never
 /// re-fits or reloads when the viewport changes -- see
 /// `GBF_Pake_MOBILE_CLIENT_NOTES.md`. This is the default client.
+///
+/// On Windows this string is the HTTP request header only. `navigator.userAgent`
+/// stays the desktop Chrome string from `pake.json`, matching Thorium + Speed
+/// Tweaks, so Menu opens `#setting/pc` (Window Size) instead of `#setting/sp`.
 pub const MOBILE_USER_AGENT: &str =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1";
 
@@ -878,15 +882,10 @@ fn split(
 /// Ignore leftover smaller than this when hugging (rounding / DPI).
 const HUG_SLACK: f64 = 8.0;
 
-/// DIAGNOSTIC 2026-09-05: Granblue sizes itself.
-///
-/// Pendant Trade quantity dropdowns (and other selects inside popups) did not
-/// receive clicks while we zoomed the game webview to Large (2.0). Before a
-/// real fix, stop driving the game's size: no webview zoom, no hug/snap of the
-/// window or the game column to `#wrapper`. The leftover after sidebar/panels
-/// is just a viewport. Flip this off once the dropdown is confirmed or ruled
-/// out as a zoom/size symptom.
-const GAME_SIZES_ITSELF: bool = true;
+/// DIAGNOSTIC 2026-09-05: when true, Granblue sizes itself (no webview zoom,
+/// no hug/snap, Game size Large/Small hidden). Off again: Large/Small and the
+/// hug path are back, while we match Thorium's request-only mobile UA instead.
+const GAME_SIZES_ITSELF: bool = false;
 
 /// CSS pixels in the game webview → window logical pixels.
 ///
@@ -980,9 +979,8 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
 }
 
 /// The desktop client's Automatic Resizing is a bare window, so panels are
-/// refused there. The mobile client has no Window Size settings --
-/// `mobage_fixwindowsize` is always 0 -- so gating on that flag would refuse
-/// panels forever, including Options.
+/// refused there. Do not gate this on `mobage_fixwindowsize`: with a Windows
+/// navigator the mobile client can show Window Size, and that flag can move.
 fn panels_unavailable(app: &AppHandle, label: &str) -> bool {
     native_mode(&app.state::<SidebarState>(), label)
 }
@@ -993,8 +991,9 @@ fn panels_unavailable(app: &AppHandle, label: &str) -> bool {
 /// thing left is gbf-edge.js's 2s read of `mobage_fixwindowsize`, which is
 /// how we notice the player leaving.
 ///
-/// The mobile client is never this mode: it has no Window Size settings, so
-/// `mobage_fixwindowsize` is permanently 0 there and means nothing.
+/// The mobile client is never this mode (`is_mobile` is our chosen client).
+/// Matching Thorium, Menu can still open `#setting/pc` with Window Size;
+/// that does not flip us into a bare window.
 fn native_mode(state: &SidebarState, label: &str) -> bool {
     state.is_automatic(label) && !state.is_mobile(label)
 }
@@ -1017,8 +1016,6 @@ fn apply_mobile_zoom(host: &Window) -> Option<String> {
         return None;
     }
     let game = game_webview(host)?;
-    // Diagnostic: leave zoom at 1 so Granblue's own layout is what you see.
-    // A leftover Large 2.0 from the previous build is cleared once.
     let target = if GAME_SIZES_ITSELF {
         1.0
     } else if state.is_mobile_half() {

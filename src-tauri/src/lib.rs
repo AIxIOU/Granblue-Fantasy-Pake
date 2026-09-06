@@ -254,8 +254,8 @@ pub fn run_app() {
             if !matches!(payload.event(), PageLoadEvent::Finished) {
                 return;
             }
-            // Skip about:blank (and other about: placeholders) used by the macOS
-            // cert-bypass path before the real target URL navigates.
+            // Skip about:blank (and other about: placeholders) used before the
+            // real target URL navigates (macOS cert-bypass, Windows request UA).
             if is_placeholder_startup_url(payload.url()) {
                 return;
             }

@@ -559,12 +559,38 @@ fn build_window(
     // Which Granblue client to ask for. Default is MOBILE: it is a fixed 320
     // CSS layout that never re-fits and never reloads on a width change, where
     // the desktop client reloads on every resize under Automatic Resizing.
-    // The user agent can only be set when the webview is built, so switching
-    // this restarts the app (see `gbf_set_desktop_client`).
-    let user_agent = if crate::app::sidebar::restore_layout_desktop_client(app) {
+    // Switching clients still restarts the app (see `gbf_set_desktop_client`).
+    //
+    // `navigator.userAgent` comes from this string. On Windows the mobile
+    // client is requested separately, by rewriting the HTTP User-Agent header
+    // (Thorium + Speed Tweaks), so navigator can stay desktop Chrome and Menu
+    // opens `#setting/pc` with Window Size instead of `#setting/sp`.
+    let desktop_client = crate::app::sidebar::restore_layout_desktop_client(app);
+    let user_agent = if desktop_client || cfg!(target_os = "windows") {
         config.user_agent.get().clone()
     } else {
         crate::app::sidebar::MOBILE_USER_AGENT.to_string()
+    };
+
+    // Attach the request-header rewrite before the first Granblue document
+    // goes out. about:blank is skipped by the startup reveal gate.
+    #[cfg(target_os = "windows")]
+    let pending_mobile_nav: Option<String> = if !desktop_client {
+        match &url {
+            WebviewUrl::External(u) if !u.scheme().eq_ignore_ascii_case("about") => {
+                Some(u.to_string())
+            }
+            _ if window_config.url_type == "web" => Some(window_config.url.clone()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    #[cfg(target_os = "windows")]
+    let url = if pending_mobile_nav.is_some() {
+        WebviewUrl::External(Url::parse("about:blank").expect("about:blank must be a valid URL"))
+    } else {
+        url
     };
 
     let config_script = format!(
@@ -874,6 +900,11 @@ fn build_window(
 
     let window = window_builder.build()?;
 
+    #[cfg(target_os = "windows")]
+    if !desktop_client {
+        attach_request_only_mobile_ua(&window, pending_mobile_nav);
+    }
+
     // A shared identifier alone leaves each NSWindow in automatic mode.
     // Prefer tabs only for Cmd+N clones so they join the main window's tab
     // group. The main window stays bar-less until another tab exists, while
@@ -929,6 +960,107 @@ fn build_window(
     Ok(window)
 }
 
+/// Match Thorium + Speed Tweaks: Granblue document requests see the iOS
+/// User-Agent, while WebView2's own UA (and therefore `navigator.userAgent`)
+/// stays the desktop Chrome string from `pake.json`.
+///
+/// `.user_agent()` cannot split those. Speed Tweaks only rewrites main_frame /
+/// sub_frame; XHR stays desktop so `#setting/pc` can include Window Size.
+/// Filtering every resource type hid that section. Child webviews (wiki /
+/// About / Options) never match these hosts, so they are untouched.
+#[cfg(target_os = "windows")]
+fn attach_request_only_mobile_ua(window: &WebviewWindow, then_navigate: Option<String>) {
+    if let Err(error) = window.with_webview(move |webview| {
+        use webview2_com::{
+            Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+            take_pwstr, WebResourceRequestedEventHandler,
+        };
+        use windows_core::{w, HSTRING, PWSTR};
+
+        let controller = webview.controller();
+        unsafe {
+            let Ok(core) = controller.CoreWebView2() else {
+                eprintln!("[Pake][gbf] CoreWebView2 missing; cannot split request UA");
+                return;
+            };
+            if core
+                .AddWebResourceRequestedFilter(
+                    w!("https://*"),
+                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+                )
+                .is_err()
+            {
+                eprintln!("[Pake][gbf] AddWebResourceRequestedFilter https failed");
+            }
+            let _ = core.AddWebResourceRequestedFilter(
+                w!("http://*"),
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+            );
+
+            let handler = WebResourceRequestedEventHandler::create(Box::new(|_, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let request = args.Request()?;
+                let uri = {
+                    let mut uri = PWSTR::null();
+                    request.Uri(&mut uri)?;
+                    take_pwstr(uri)
+                };
+                if !is_granblue_request_url(&uri) {
+                    return Ok(());
+                }
+                let headers = request.Headers()?;
+                headers.SetHeader(
+                    w!("User-Agent"),
+                    &HSTRING::from(crate::app::sidebar::MOBILE_USER_AGENT),
+                )?;
+                Ok(())
+            }));
+            let mut token = 0i64;
+            if core.add_WebResourceRequested(&handler, &mut token).is_err() {
+                eprintln!("[Pake][gbf] add_WebResourceRequested failed");
+            }
+            if let Some(url) = then_navigate.as_deref() {
+                if let Err(error) = core.Navigate(&HSTRING::from(url)) {
+                    eprintln!("[Pake][gbf] Navigate after UA filter failed: {error}");
+                }
+            }
+        }
+    }) {
+        eprintln!("[Pake][gbf] with_webview for request UA failed: {error}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_granblue_request_url(uri: &str) -> bool {
+    let host = request_url_host(uri);
+    host == "granbluefantasy.jp"
+        || host.ends_with(".granbluefantasy.jp")
+        || host == "granbluefantasy.com"
+        || host.ends_with(".granbluefantasy.com")
+        || host == "gbf.game.mbga.jp"
+        || host.ends_with(".gbf.game.mbga.jp")
+}
+
+#[cfg(target_os = "windows")]
+fn request_url_host(uri: &str) -> String {
+    let rest = uri.split("://").nth(1).unwrap_or(uri);
+    let hostport = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = hostport.rsplit('@').next().unwrap_or(hostport);
+    if let Some(inner) = host.strip_prefix('[') {
+        return inner
+            .split(']')
+            .next()
+            .unwrap_or(inner)
+            .to_ascii_lowercase();
+    }
+    host.split(':')
+        .next()
+        .unwrap_or(host)
+        .to_ascii_lowercase()
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod proxy_arg_tests {
     use super::*;
@@ -960,5 +1092,15 @@ mod proxy_arg_tests {
         // https proxies fall back to platform proxy_url; we only emit a CLI arg
         // for http/socks5 today.
         assert!(build_proxy_browser_arg(&parse("https://proxy.local:8443")).is_none());
+    }
+
+    #[test]
+    fn granblue_request_hosts() {
+        assert!(is_granblue_request_url(
+            "https://steam.granbluefantasy.com/#mypage"
+        ));
+        assert!(is_granblue_request_url("https://game.granbluefantasy.jp/"));
+        assert!(!is_granblue_request_url("https://gbf.wiki/Main_Page"));
+        assert!(!is_granblue_request_url("https://notgranbluefantasy.com/"));
     }
 }

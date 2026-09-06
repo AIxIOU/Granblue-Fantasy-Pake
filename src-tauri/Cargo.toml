@@ -62,8 +62,10 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
-# Used for native WebView2 GoBack/GoForward on error pages (no page JS).
+# Used for native WebView2 GoBack/GoForward on error pages (no page JS),
+# and for rewriting the Granblue request User-Agent without touching navigator.
 webview2-com = "0.38"
+windows-core = "0.61"
 
 [features]
 # this feature is used for development builds from development cli
