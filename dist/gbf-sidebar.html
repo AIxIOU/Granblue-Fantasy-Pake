@@ -206,6 +206,8 @@
   body.collapsed #actions .lbl { display: none; }
   body.collapsed .act-row { flex-direction: column; }
   body.collapsed #actions { padding: 6px 8px; }
+  /* Mobile Granblue already has Back. These only earn their keep on desktop. */
+  body.mobile #actions { display: none !important; }
 
   #foot {
     flex: 0 0 auto; border-top: 1px solid var(--line);
@@ -263,7 +265,7 @@
 </div>
 <div id="nav"></div>
 <div id="notice" role="status" aria-live="polite"></div>
-<div id="actions">
+<div id="actions" hidden>
   <div class="sec" id="sec-actions">Actions</div>
   <div class="act-row">
     <button type="button" class="wbtn" id="gback" title="Back in Granblue (Alt+Left)">
@@ -576,6 +578,8 @@
       // Desktop: Layout (Lock to game). Mobile: Game size (Large / Small).
       var isMobile = !!st.mobile;
       document.body.classList.toggle("mobile", isMobile);
+      var actions = document.getElementById("actions");
+      if (actions) actions.hidden = isMobile;
       var layoutSec = document.getElementById("sec-layout");
       if (layoutSec) layoutSec.hidden = isMobile;
       if (l) {
