@@ -1746,6 +1746,23 @@ pub fn gbf_nav(window: Window, hash: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Game history back. Same as the shipping sidebar's Back: `history.back()`
+/// on Granblue's webview, not the sidebar's.
+#[tauri::command]
+pub fn gbf_game_back(window: Window) -> Result<(), String> {
+    let game = game_webview(&window)
+        .ok_or_else(|| format!("no game webview labelled '{}'", window.label()))?;
+    game.eval("history.back()").map_err(|e| e.to_string())
+}
+
+/// Reload Granblue's page. Same as the shipping sidebar's Reload.
+#[tauri::command]
+pub fn gbf_game_reload(window: Window) -> Result<(), String> {
+    let game = game_webview(&window)
+        .ok_or_else(|| format!("no game webview labelled '{}'", window.label()))?;
+    game.eval("location.reload()").map_err(|e| e.to_string())
+}
+
 /// Collapse or expand. Returns a narrated report of the relayout.
 ///
 /// The relayout is marshalled onto the main thread: Tauri runs command handlers

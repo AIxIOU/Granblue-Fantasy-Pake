@@ -191,6 +191,22 @@
     word-break: break-all; display: none;
   }
   #dbg.on { display: block; }
+  #actions {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--line);
+    padding: 4px 10px 8px;
+    background: var(--bg-deep);
+  }
+  #actions .sec { padding: 6px 2px 6px; }
+  .act-row { display: flex; gap: 6px; }
+  .act-row .wbtn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  body.collapsed #actions .sec,
+  body.collapsed #actions .lbl { display: none; }
+  body.collapsed .act-row { flex-direction: column; }
+  body.collapsed #actions { padding: 6px 8px; }
+
   #foot {
     flex: 0 0 auto; border-top: 1px solid var(--line);
     padding: 7px 12px; font-size: 10px; color: var(--fg-dim); white-space: nowrap;
@@ -214,7 +230,7 @@
     position: fixed;
     left: 8px;
     right: 8px;
-    bottom: 34px;
+    bottom: 96px;
     z-index: 40;
     padding: 10px 12px;
     border-radius: 6px;
@@ -244,6 +260,17 @@
 </div>
 <div id="nav"></div>
 <div id="notice" role="status" aria-live="polite"></div>
+<div id="actions">
+  <div class="sec" id="sec-actions">Actions</div>
+  <div class="act-row">
+    <button type="button" class="wbtn" id="gback" title="Back in Granblue (Alt+Left)">
+      <span class="ico">&#8592;</span><span class="lbl">Back</span>
+    </button>
+    <button type="button" class="wbtn" id="greload" title="Reload Granblue (Alt+R)">
+      <span class="ico">&#8635;</span><span class="lbl">Reload</span>
+    </button>
+  </div>
+</div>
 <div id="foot">starting…</div>
 <pre id="dbg"></pre>
 
@@ -462,6 +489,19 @@
     if (ref) nav.insertBefore(gs, ref);
     else nav.appendChild(gs);
   })();
+
+  document.getElementById("gback").addEventListener("click", function () {
+    say("back…");
+    invoke("gbf_game_back")
+      .then(function () { say("back ok"); })
+      .catch(function (e) { say(String(e && e.message ? e.message : e)); });
+  });
+  document.getElementById("greload").addEventListener("click", function () {
+    say("reload…");
+    invoke("gbf_game_reload")
+      .then(function () { say("reload ok"); })
+      .catch(function (e) { say(String(e && e.message ? e.message : e)); });
+  });
 
   document.getElementById("wback").addEventListener("click", function () {
     invoke("gbf_wiki_back").catch(function (e) { say(String(e)); });

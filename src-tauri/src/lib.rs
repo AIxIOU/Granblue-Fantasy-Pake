@@ -316,6 +316,8 @@ pub fn run_app() {
             webview_navigate,
             // EXPERIMENT ONLY -- native sidebar. Not on main.
             app::sidebar::gbf_nav,
+            app::sidebar::gbf_game_back,
+            app::sidebar::gbf_game_reload,
             app::sidebar::gbf_toggle_sidebar,
             app::sidebar::gbf_debug,
             app::sidebar::gbf_toggle_app_windows,
