@@ -1184,12 +1184,6 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         s.game_w, s.wiki_w, s.sidebar_w, s.height
     );
 
-    if maybe_hug_window(host, col, &s)? {
-        out.push_str("hug: set_size issued\n");
-        // Keep going and place the chrome. Returning here left the sidebar
-        // at its pre-hug x, off the right edge of the smaller window.
-    }
-
     let panel_min = if wiki_open {
         WIKI_MIN_W
     } else if about_open || options_open {
@@ -1337,6 +1331,27 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
                 bounds_word(&bar),
             ));
         }
+    }
+
+    // HUG LAST, once every webview already holds its final bounds.
+    //
+    // This used to run before the placement block. On a SHRINK that meant the
+    // frame narrowed while the children still held their old geometry, and
+    // Windows repainted the seam between them before we moved anything: a
+    // ~250px strip straddling the game/sidebar edge went white for one or two
+    // frames. Measured 2026-09-06 at 60fps -- 2 frames on a shrink
+    // (Wiki -> About/Options), none on a grow (About -> Wiki), none when no
+    // resize happens at all (About <-> Options). Direction is the tell.
+    //
+    // Placing first means the shrink only ever clips space nothing is using.
+    // The grow path above still runs BEFORE placement, which is the correct
+    // order in that direction: widen the frame, then fill it.
+    //
+    // Returning early here is what left the sidebar at its pre-hug x, off the
+    // right edge of the smaller window (recording 113543) -- placing first
+    // removes that hazard rather than working around it.
+    if maybe_hug_window(host, col, &s)? {
+        out.push_str("hug: set_size issued\n");
     }
 
     state.set_hug_busy(&label, false);
