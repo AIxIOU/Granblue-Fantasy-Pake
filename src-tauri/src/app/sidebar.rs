@@ -98,22 +98,40 @@ const LOCK_STYLE_ID: &str = "gbf-native-locked";
 /// Granblue's own chat column. Hiding it is RULE 0 EXCEPTION 2.
 const LOCK_SELECTOR: &str = "#submenu,#general-chat{display:none !important;}";
 
-/// What a webview paints before it has content: its FIRST frame after the
-/// frame is resized, which is the panel-switch flash.
+/// The colour anything of ours shows before it has content -- above all the
+/// HOST WINDOW's own background, which is what the panel-switch flash was.
 ///
-/// A window resize makes WebView2 re-composite, and its blank frame is WHITE
-/// by default -- a white strip over the game/sidebar seam for one to three
-/// frames on every shrink. That repaint cannot be suppressed from our side:
-/// measured, `SWP_NOREDRAW` on the frame changed nothing, and freezing the
-/// window with `WM_SETREDRAW` made it worse (the whole strip went white
-/// instead of part of it). WebView2 composites out of process, so the classic
-/// GDI redraw suppression does not reach it. Skipping the resize entirely
-/// removed the flash completely, which is what proved the resize is the
-/// trigger -- but the resize is what keeps the frame hugged to the content.
+/// # What the flash actually is
 ///
-/// So: stop fighting the repaint and make it invisible. Granblue's page and
-/// the sidebar are both near-black, so a near-black blank frame reads as
-/// nothing at all.
+/// Shrinking the frame repaints the window's background in the strip where
+/// the game and the sidebar meet, before the two webviews composite over it
+/// again. Windows' default is WHITE, so it read as a white band flashing over
+/// the right of the game for one to three frames.
+///
+/// # How that was established
+///
+/// By painting every surface a different colour and switching panels four
+/// times. **Magenta -- the window background -- appeared in the band. Red
+/// (wiki), green (game), blue (sidebar) and yellow (panel) never did.** So it
+/// is not a webview's blank frame, and it is not the wiki being pushed
+/// across: it is the parent window showing through a seam its children have
+/// not covered yet.
+///
+/// # What does NOT work, so nobody retries it
+///
+/// - `SWP_NOREDRAW` on the resize: no change, still flashed.
+/// - `WM_SETREDRAW` freeze plus one `RedrawWindow`: worse, the whole strip
+///   went white instead of part of it.
+/// - Colouring only the webviews: the band stayed white, which is what
+///   pointed at the window itself.
+///
+/// Skipping the resize entirely removed it, which is what proved the resize
+/// is the trigger -- but the resize is what keeps the frame hugged to the
+/// content, so it stays.
+///
+/// Granblue's page and the sidebar are both near-black, so a near-black
+/// window background makes the repaint invisible. It still happens; there is
+/// simply nothing bright to see.
 const WEBVIEW_BLANK: Color = Color(11, 11, 15, 255);
 
 /// One sidebar per window, so `--multi-window` keeps working: each window gets
@@ -1498,7 +1516,12 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
         );
 
     // The two that meet at the seam. See WEBVIEW_BLANK.
-    for wv in [game_webview(&host), sidebar_webview(&host)].into_iter().flatten() {
+    // THE HOST WINDOW is the one that matters -- see WEBVIEW_BLANK.
+    let _ = host.set_background_color(Some(WEBVIEW_BLANK));
+    for wv in [game_webview(&host), sidebar_webview(&host)]
+        .into_iter()
+        .flatten()
+    {
         let _ = wv.set_background_color(Some(WEBVIEW_BLANK));
     }
 
