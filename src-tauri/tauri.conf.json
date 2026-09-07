@@ -1,11 +1,11 @@
 {
-  "productName": "GBF Pake NATIVE SIDEBAR EXPERIMENT",
+  "productName": "Granblue Fantasy nPake",
   "identifier": "com.gbf.pake.experiment.nativesidebar",
   "version": "3.15.7",
   "app": {
     "withGlobalTauri": true,
     "trayIcon": {
-      "iconPath": "png/weekly_512.png",
+      "iconPath": "png/gbf_npake_512.png",
       "iconAsTemplate": false,
       "id": "pake-tray"
     },
