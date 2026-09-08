@@ -1,4 +1,26 @@
 use crate::app::config::PakeConfig;
+
+/// EXPERIMENT. The `additional_browser_args` string given to the main window,
+/// captured at creation so child webviews can reuse it byte-for-byte.
+///
+/// WebView2 keys an environment on the user-data folder **and** its options.
+/// Two environments over one folder with different options do not merge, and
+/// the second one does not fail -- `add_child` simply never returns. That hang
+/// is silent: `pake` is a `windows_subsystem = "windows"` binary, so there is
+/// no console, and the app keeps running with the game webview it already had
+/// while the sidebar, wiki and panel never appear.
+///
+/// Rebuilding the string in `sidebar.rs` would work today and hang the moment
+/// anyone enables `enable_wasm`, `ignore_certificate_errors`, or a proxy, since
+/// only this function sees those. One runtime value, set here, read there.
+#[cfg(target_os = "windows")]
+pub static MAIN_BROWSER_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The main window's browser args, if the main window has been built.
+#[cfg(target_os = "windows")]
+pub fn main_browser_args() -> Option<&'static str> {
+    MAIN_BROWSER_ARGS.get().map(|s| s.as_str())
+}
 use crate::util::{
     check_file_or_append, get_data_dir, get_download_message_with_lang, sanitize_download_filename,
     show_toast, MessageType,
@@ -809,6 +831,9 @@ fn build_window(
 
         #[cfg(target_os = "windows")]
         {
+            // Record the EXACT string before handing it over. Child webviews
+            // added later must reuse it verbatim -- see `main_browser_args`.
+            let _ = MAIN_BROWSER_ARGS.set(windows_browser_args.clone());
             window_builder = window_builder.additional_browser_args(&windows_browser_args);
         }
 

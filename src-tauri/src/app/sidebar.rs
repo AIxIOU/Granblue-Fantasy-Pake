@@ -1814,8 +1814,11 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     // No auto_resize(): this webview is positioned by layout() alone. Letting
     // Tauri grow it with the window would put it back on top of the game.
     let boot = theme_boot_script(&host);
-    let builder = WebviewBuilder::new(&label, WebviewUrl::App("gbf-sidebar.html".into()))
-        .initialization_script(&boot);
+    let builder = with_shared_env(
+        WebviewBuilder::new(&label, WebviewUrl::App("gbf-sidebar.html".into()))
+            .initialization_script(&boot),
+        shared_data_dir(&host),
+    );
 
     host.add_child(
         builder,
@@ -2169,12 +2172,84 @@ pub fn gbf_new_window(app: AppHandle) -> Result<String, String> {
 ///   - **No cross-origin problems**, and the wiki keeps its own history, scroll
 ///     position and session -- across being closed, and across the game
 ///     reloading beside it.
+/// The WebView2 user-data directory the game webview was given.
+///
+/// `window.rs` sets `data_directory` on the main window only. A child webview
+/// built without it silently falls back to Tauri's default path, and a
+/// different user-data directory is a different WebView2 **environment** --
+/// not just a different profile. Each environment brings its own GPU process,
+/// network service, storage service and crashpad handler.
+///
+/// Measured 2026-09-08 on the installed build: two environments were live at
+/// once (`Roaming\<product>` for the game, `Local\<identifier>` for the
+/// sidebar, wiki and panel), costing ~650 MB in duplicate processes. Every
+/// webview in this window must be handed the same directory.
+///
+/// Returns `None` only if the path cannot be resolved or created; callers then
+/// build without it, which is the old behaviour rather than a hard failure.
+fn shared_data_dir(host: &Window) -> Option<PathBuf> {
+    let app = host.app_handle();
+    let package_name = app
+        .config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| "pake".to_string());
+    match crate::util::get_data_dir(app, package_name) {
+        Ok(dir) => Some(dir),
+        Err(error) => {
+            eprintln!("[Pake][gbf] could not resolve the shared webview data dir: {error}");
+            None
+        }
+    }
+}
+
+/// Put a child webview in the SAME WebView2 environment as the game.
+///
+/// Both halves are required and must be applied together: the user-data folder
+/// and the browser args. Matching only the folder makes `add_child` hang
+/// forever rather than fail (see [`crate::app::window::MAIN_BROWSER_ARGS`]), so
+/// if the args are not available this deliberately applies neither and accepts
+/// the old duplicate-environment behaviour. A second environment costs memory;
+/// a mismatched one costs the sidebar entirely.
+///
+/// Windows only. `data_directory` means something different on the other
+/// platforms' webviews and the duplication measured here is a WebView2 trait.
+#[cfg(target_os = "windows")]
+fn with_shared_env<R: tauri::Runtime>(
+    builder: WebviewBuilder<R>,
+    dir: Option<PathBuf>,
+) -> WebviewBuilder<R> {
+    match (dir, crate::app::window::main_browser_args()) {
+        (Some(dir), Some(args)) => builder.data_directory(dir).additional_browser_args(args),
+        (dir, args) => {
+            eprintln!(
+                "[Pake][gbf] not sharing the game's webview environment (dir={}, args={}); \
+                 the sidebar will get its own, which costs memory but still works",
+                dir.is_some(),
+                args.is_some()
+            );
+            builder
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn with_shared_env<R: tauri::Runtime>(
+    builder: WebviewBuilder<R>,
+    _dir: Option<PathBuf>,
+) -> WebviewBuilder<R> {
+    builder
+}
+
 fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
     let label = wiki_label(host.label());
     let blank = Url::parse("about:blank").expect("about:blank parses");
     host.add_child(
-        WebviewBuilder::new(&label, WebviewUrl::External(blank))
-            .initialization_script(include_str!("../inject/gbf-keys.js")),
+        with_shared_env(
+            WebviewBuilder::new(&label, WebviewUrl::External(blank))
+                .initialization_script(include_str!("../inject/gbf-keys.js")),
+            shared_data_dir(host),
+        ),
         LogicalPosition::new(sp.game_w, 0.0),
         LogicalSize::new(WIKI_W, sp.height),
     )?;
@@ -2192,8 +2267,11 @@ fn create_panel(host: &Window, sp: &Split) -> tauri::Result<()> {
     let boot = theme_boot_script(host);
     let init = format!("{keys}\n{boot}");
     host.add_child(
-        WebviewBuilder::new(&label, WebviewUrl::App(ABOUT_PAGE.into()))
-            .initialization_script(&init),
+        with_shared_env(
+            WebviewBuilder::new(&label, WebviewUrl::App(ABOUT_PAGE.into()))
+                .initialization_script(&init),
+            shared_data_dir(host),
+        ),
         LogicalPosition::new(sp.game_w, 0.0),
         LogicalSize::new(ABOUT_W, sp.height),
     )?;
