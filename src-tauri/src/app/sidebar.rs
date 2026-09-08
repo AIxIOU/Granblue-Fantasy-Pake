@@ -2916,6 +2916,36 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Which build is this, exactly.
+///
+/// The maintainer could not tell one build from another, and the version alone
+/// does not settle it -- a dozen builds in one afternoon all say `3.15.7`. The
+/// commit and the build time are what actually identify a binary, so they are
+/// stamped in by `build.rs` and reported here.
+///
+/// `identifier` is included deliberately. It is the ONLY thing separating this
+/// from the shipping client now that the product name no longer says
+/// EXPERIMENT, and it is what keeps the two installs and their logins apart.
+/// A rail that invisible is worth printing where someone will see it.
+#[tauri::command]
+pub fn gbf_version(window: Window) -> Result<serde_json::Value, String> {
+    let app = window.app_handle();
+    let info = app.package_info();
+    Ok(serde_json::json!({
+        "name": info.name,
+        "version": info.version.to_string(),
+        "identifier": app.config().identifier,
+        "commit": env!("GBF_BUILD_COMMIT"),
+        // Seconds since the epoch. The page formats it as local time.
+        "builtEpoch": env!("GBF_BUILD_EPOCH").parse::<u64>().unwrap_or(0),
+        // A release build and a debug build of the same commit behave
+        // differently; today's frame-rate work only held on the release one.
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "tauri": tauri::VERSION,
+        "webview": tauri::webview_version().unwrap_or_else(|_| "unknown".into()),
+    }))
+}
+
 /// Palette for the sidebar, Options, and About. Granblue and gbf.wiki keep
 /// their own look. Process-wide, like the tray flag.
 #[tauri::command]

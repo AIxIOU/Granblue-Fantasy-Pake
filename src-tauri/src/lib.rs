@@ -328,6 +328,7 @@ pub fn run_app() {
             app::sidebar::gbf_wiki_home,
             app::sidebar::gbf_toggle_lock,
             app::sidebar::gbf_panel_state,
+            app::sidebar::gbf_version,
             app::sidebar::gbf_set_wiki_outside,
             app::sidebar::gbf_set_theme,
             app::sidebar::gbf_set_sidebar_debug,
