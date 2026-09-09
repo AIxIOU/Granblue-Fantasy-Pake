@@ -205,8 +205,8 @@ pub fn run_app() {
     let tray_icon_path = pake_config.system_tray_path.clone();
     let multi_instance = pake_config.multi_instance;
     // pake.json's `multi_window` is deliberately NOT read here any more. The
-    // persisted per-user choice replaces it and defaults ON, capped at one
-    // extra window; it is loaded in the setup hook below, before the tray and
+    // persisted per-user choice replaces it and defaults OFF (a second Granblue
+    // view inside this window is the cheaper option); it is loaded in the setup hook below, before the tray and
     // menu are built from it.
     // (macOS native window tabbing in window.rs still consults the config
     // flag, which is a different question -- how windows group, not whether
@@ -341,6 +341,10 @@ pub fn run_app() {
             app::sidebar::gbf_set_sidebar_nav,
             app::sidebar::gbf_set_multi_window,
             app::sidebar::gbf_set_window_unlimited,
+            app::sidebar::gbf_game2_toggle,
+            app::sidebar::gbf_set_game2_half,
+            app::sidebar::gbf_game2_back,
+            app::sidebar::gbf_game2_reload,
             app::sidebar::gbf_set_desktop_client,
             app::sidebar::gbf_set_mobile_half,
             app::setup::gbf_set_tray,
@@ -384,6 +388,9 @@ pub fn run_app() {
                 app::sidebar::restore_layout_window_unlimited(app.app_handle());
             app.state::<app::sidebar::SidebarState>()
                 .set_window_unlimited(window_unlimited);
+            let game2_half = app::sidebar::restore_layout_game2_half(app.app_handle());
+            app.state::<app::sidebar::SidebarState>()
+                .set_game2_half(game2_half);
             app.manage(TrayRuntime {
                 icon_path: tray_icon_path.clone(),
                 init_fullscreen,

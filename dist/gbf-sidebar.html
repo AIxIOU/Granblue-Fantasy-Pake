@@ -265,6 +265,8 @@
 <div id="wikibar" hidden>
   <button class="wbtn" id="wback" title="Back in the wiki">&#8592;</button>
   <button class="wbtn" id="whome" title="Wiki front page">&#8962;</button>
+  <button class="wbtn" id="g2back" title="Back in the second view">&#8592;</button>
+  <button class="wbtn" id="g2reload" title="Reload the second view">&#8635;</button>
   <button class="wbtn" id="wclose" title="Close this panel">&#10005;</button>
 </div>
 <div id="nav"></div>
@@ -320,6 +322,9 @@
 
     { section: "Reference" },
     { label: "Wiki", cmd: "gbf_wiki_toggle", id: "nav-wiki", icon: "⊞", key: "W" },
+    // A second Granblue beside the first, in this window. Same panel slot as
+    // the wiki, so opening one closes the other.
+    { label: "Second view", cmd: "gbf_game2_toggle", id: "nav-game2", icon: "◫" },
 
     { section: "App" },
     // Hidden unless Options allows extra windows. Opening one takes a while --
@@ -527,9 +532,18 @@
   document.getElementById("whome").addEventListener("click", function () {
     invoke("gbf_wiki_home").catch(function (e) { say(String(e)); });
   });
+  document.getElementById("g2back").addEventListener("click", function () {
+    invoke("gbf_game2_back").catch(function (e) { say(String(e)); });
+  });
+  document.getElementById("g2reload").addEventListener("click", function () {
+    invoke("gbf_game2_reload").catch(function (e) { say(String(e)); });
+  });
   document.getElementById("wclose").addEventListener("click", function () {
     var p = window.__gbfPanel || {};
-    var cmd = p.options ? "gbf_options_toggle" : p.about ? "gbf_about_toggle" : "gbf_wiki_toggle";
+    var cmd = p.options ? "gbf_options_toggle"
+      : p.about ? "gbf_about_toggle"
+      : p.game2 ? "gbf_game2_toggle"
+      : "gbf_wiki_toggle";
     invoke(cmd)
       .then(dump)
       .catch(function (e) { say(String(e && e.message ? e.message : e)); });
@@ -571,13 +585,24 @@
     setState: function (st) {
       st = st || {};
       document.body.classList.toggle("collapsed", !!st.collapsed);
-      window.__gbfPanel = { wiki: !!st.wikiOpen, about: !!st.aboutOpen, options: !!st.optionsOpen };
+      window.__gbfPanel = {
+        wiki: !!st.wikiOpen, about: !!st.aboutOpen,
+        options: !!st.optionsOpen, game2: !!st.game2Open
+      };
       var bar = document.getElementById("wikibar");
-      if (bar) bar.hidden = !(st.wikiOpen || st.aboutOpen || st.optionsOpen);
+      if (bar) bar.hidden = !(st.wikiOpen || st.aboutOpen || st.optionsOpen || st.game2Open);
       var back = document.getElementById("wback");
       var home = document.getElementById("whome");
       if (back) back.hidden = !st.wikiOpen;
       if (home) home.hidden = !st.wikiOpen;
+      // The second view drives ITS OWN history, not the game's -- that is what
+      // the sidebar's Back / Reload under Actions already do.
+      var g2b = document.getElementById("g2back");
+      var g2r = document.getElementById("g2reload");
+      if (g2b) g2b.hidden = !st.game2Open;
+      if (g2r) g2r.hidden = !st.game2Open;
+      var g2 = document.getElementById("nav-game2");
+      if (g2) g2.classList.toggle("active", !!st.game2Open);
       var w = document.getElementById("nav-wiki");
       if (w) w.classList.toggle("active", !!st.wikiOpen);
       var a = document.getElementById("nav-about");

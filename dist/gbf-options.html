@@ -155,6 +155,20 @@
     the game can have the whole window.</span>
   </button>
 
+  <h2>Second Granblue view</h2>
+  <p class="lede">The sidebar's <b>Second view</b> opens another Granblue in
+  this window, beside the first. It shares the panel slot with the wiki, so
+  opening one closes the other, and it has its own Back and Reload.</p>
+  <button type="button" class="choice" id="opt-g2-large">
+    <b>Large</b>
+    <span>Same scale as the main game. Default.</span>
+  </button>
+  <button type="button" class="choice" id="opt-g2-small">
+    <b>Small</b>
+    <span>Half scale, so it needs about half the width. Useful beside a Large
+    main game on a narrower screen.</span>
+  </button>
+
   <h2>Desktop</h2>
   <button type="button" class="choice" id="opt-multiwin">
     <b>Multiple windows</b>
@@ -199,7 +213,7 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside, tray, desktopClient, theme, sidebarDebug, sidebarNav, multiWindow, noLimit) {
+  function paint(outside, tray, desktopClient, theme, sidebarDebug, sidebarNav, multiWindow, noLimit, g2Half) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
     document.getElementById("opt-tray").classList.toggle("on", !!tray);
@@ -208,6 +222,8 @@
     document.getElementById("opt-debug").classList.toggle("on", !!sidebarDebug);
     document.getElementById("opt-nav").classList.toggle("on", !!sidebarNav);
     document.getElementById("opt-multiwin").classList.toggle("on", !!multiWindow);
+    document.getElementById("opt-g2-large").classList.toggle("on", !g2Half);
+    document.getElementById("opt-g2-small").classList.toggle("on", !!g2Half);
     var nolimit = document.getElementById("opt-nolimit");
     nolimit.classList.toggle("on", !!noLimit);
     // The cap only means anything while extra windows are allowed at all.
@@ -224,11 +240,12 @@
   var navOn = true;
   var multiWinOn = false;
   var noLimitOn = false;
+  var g2HalfOn = false;
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn, g2HalfOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn, g2HalfOn); });
   });
   document.getElementById("opt-theme").addEventListener("change", function () {
     themeOn = document.getElementById("opt-theme").value || "midnight";
@@ -246,6 +263,14 @@
   });
   document.getElementById("opt-multiwin").addEventListener("click", function () {
     invoke("gbf_set_multi_window", { on: !multiWinOn });
+  });
+  document.getElementById("opt-g2-large").addEventListener("click", function () {
+    if (!g2HalfOn) return;
+    invoke("gbf_set_game2_half", { half: false });
+  });
+  document.getElementById("opt-g2-small").addEventListener("click", function () {
+    if (g2HalfOn) return;
+    invoke("gbf_set_game2_half", { half: true });
   });
   document.getElementById("opt-nolimit").addEventListener("click", function () {
     invoke("gbf_set_window_unlimited", { on: !noLimitOn });
@@ -270,7 +295,8 @@
       if (Object.prototype.hasOwnProperty.call(st, "sidebarNav")) navOn = !!st.sidebarNav;
       if (Object.prototype.hasOwnProperty.call(st, "multiWindow")) multiWinOn = !!st.multiWindow;
       if (Object.prototype.hasOwnProperty.call(st, "windowUnlimited")) noLimitOn = !!st.windowUnlimited;
-      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn);
+      if (Object.prototype.hasOwnProperty.call(st, "game2Half")) g2HalfOn = !!st.game2Half;
+      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn, g2HalfOn);
     }
   };
   // Ask for our own state on load rather than waiting to be told.

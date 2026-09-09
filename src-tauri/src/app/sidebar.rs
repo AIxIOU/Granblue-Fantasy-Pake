@@ -216,6 +216,7 @@ fn apply_theme_blank(host: &Window) {
         sidebar_webview(host),
         wiki_webview(host),
         panel_webview(host),
+        game2_webview(host),
     ]
     .into_iter()
     .flatten()
@@ -228,6 +229,17 @@ fn apply_theme_blank(host: &Window) {
 /// its own game webview and its own sidebar beside it.
 pub fn sidebar_label(window_label: &str) -> String {
     format!("{window_label}--gbf-sidebar")
+}
+
+/// A SECOND Granblue view, in this window, in the panel slot.
+///
+/// Cheaper than a whole extra window: it reuses the window, the sidebar and
+/// the WebView2 environment, and adds one webview instead of four. It is a
+/// PANEL like the wiki, not a second "game" -- the `--gbf-` in the label keeps
+/// `is_game_label` false, so it never reports geometry, never drives the hug,
+/// and cannot be mistaken for the game the layout is built around.
+pub fn game2_label(window_label: &str) -> String {
+    format!("{window_label}--gbf-game2")
 }
 
 /// The wiki gets its own webview too, one per window.
@@ -317,10 +329,12 @@ struct SavedLayout {
     #[serde(default = "default_sidebar_nav")]
     sidebar_nav: bool,
     /// Extra app windows (tray and sidebar "New Window"). Process-wide.
-    /// **Default true.** The build config also carries a `multi_window` flag;
+    /// **Default false** -- a second Granblue view inside this window is the
+    /// cheaper way to watch two things, so whole extra windows are opt-in.
+    /// The build config also carries a `multi_window` flag;
     /// this persisted choice is what the app actually honours, so the two can
     /// disagree and this one wins.
-    #[serde(default = "default_multi_window")]
+    #[serde(default)]
     multi_window: bool,
     /// Lift the cap on how many extra windows may exist. **Default false**,
     /// meaning ONE extra window beside the main one. Each window carries a
@@ -328,10 +342,10 @@ struct SavedLayout {
     /// to stop a stray double-click quietly tripling the app's memory.
     #[serde(default)]
     window_unlimited: bool,
-}
-
-fn default_multi_window() -> bool {
-    true
+    /// Size the second Granblue view opens at: false = Large (zoom 2, the same
+    /// default as the main game), true = Small (zoom 1). Process-wide.
+    #[serde(default)]
+    game2_half: bool,
 }
 
 fn default_sidebar_nav() -> bool {
@@ -382,6 +396,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 sidebar_nav: sidebar.is_sidebar_nav(),
                 multi_window: sidebar.is_multi_window(),
                 window_unlimited: sidebar.is_window_unlimited(),
+                game2_half: sidebar.is_game2_half(),
             },
         );
     }
@@ -475,14 +490,24 @@ pub fn restore_layout_sidebar_debug(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// Extra app windows. Process-wide. **Default on.**
+/// Extra app windows. Process-wide. **Default off.**
 pub fn restore_layout_multi_window(app: &AppHandle) -> bool {
     let states = load_layout_states(app);
     states
         .get("pake")
         .map(|s| s.multi_window)
         .or_else(|| states.values().next().map(|s| s.multi_window))
-        .unwrap_or(true)
+        .unwrap_or(false)
+}
+
+/// Size the second view opens at. Process-wide. **Default Large.**
+pub fn restore_layout_game2_half(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.game2_half)
+        .or_else(|| states.values().next().map(|s| s.game2_half))
+        .unwrap_or(false)
 }
 
 /// Lift the one-extra-window cap. Process-wide. **Default off.**
@@ -512,6 +537,8 @@ struct WindowFlags {
     wiki_open: bool,
     about_open: bool,
     options_open: bool,
+    /// A second Granblue view sharing the panel slot with the three above.
+    game2_open: bool,
     /// True = panel between the game and the sidebar. Default false = the
     /// panel sits to the right of the sidebar so the rail stays flush.
     wiki_inside: bool,
@@ -578,6 +605,7 @@ pub struct SidebarState {
     sidebar_nav: AtomicBool,
     multi_window: AtomicBool,
     window_unlimited: AtomicBool,
+    game2_half: AtomicBool,
     /// Last `location.hash` read from the game webview. RAM only; used to
     /// highlight the matching sidebar nav row (same longest-prefix rule as
     /// shipping `markActive`).
@@ -631,6 +659,14 @@ impl SidebarState {
 
     pub fn is_sidebar_debug(&self) -> bool {
         self.sidebar_debug.load(Ordering::Relaxed)
+    }
+
+    pub fn is_game2_half(&self) -> bool {
+        self.game2_half.load(Ordering::Relaxed)
+    }
+
+    pub fn set_game2_half(&self, half: bool) {
+        self.game2_half.store(half, Ordering::Relaxed);
     }
 
     pub fn is_window_unlimited(&self) -> bool {
@@ -698,6 +734,24 @@ impl SidebarState {
             if open {
                 f.about_open = false;
                 f.options_open = false;
+                f.game2_open = false;
+                f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
+            }
+        });
+    }
+
+    pub fn game2_is_open(&self, label: &str) -> bool {
+        self.with(label, |f| f.game2_open)
+    }
+
+    /// One panel at a time, same as the other three.
+    pub fn set_game2_open(&self, label: &str, open: bool) {
+        self.update(label, |f| {
+            f.game2_open = open;
+            if open {
+                f.wiki_open = false;
+                f.about_open = false;
+                f.options_open = false;
                 f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
             }
         });
@@ -713,6 +767,7 @@ impl SidebarState {
             if open {
                 f.wiki_open = false;
                 f.options_open = false;
+                f.game2_open = false;
             } else {
                 f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
             }
@@ -729,6 +784,7 @@ impl SidebarState {
             if open {
                 f.wiki_open = false;
                 f.about_open = false;
+                f.game2_open = false;
             } else {
                 f.panel_fit_gen = f.panel_fit_gen.wrapping_add(1);
             }
@@ -931,10 +987,11 @@ impl SidebarState {
     fn close_panels_for_automatic(&self, label: &str) -> bool {
         let mut had = false;
         self.update(label, |f| {
-            had = f.wiki_open || f.about_open || f.options_open;
+            had = f.wiki_open || f.about_open || f.options_open || f.game2_open;
             f.wiki_open = false;
             f.about_open = false;
             f.options_open = false;
+            f.game2_open = false;
             f.wiki_panel_w = 0.0;
             f.panel_before_w = 0.0;
             f.panel_after_w = 0.0;
@@ -974,6 +1031,11 @@ fn wiki_webview(host: &Window) -> Option<Webview> {
     host.webviews().into_iter().find(|w| w.label() == label)
 }
 
+fn game2_webview(host: &Window) -> Option<Webview> {
+    let label = game2_label(host.label());
+    host.webviews().into_iter().find(|w| w.label() == label)
+}
+
 fn panel_webview(host: &Window) -> Option<Webview> {
     let label = panel_label(host.label());
     host.webviews().into_iter().find(|w| w.label() == label)
@@ -1004,6 +1066,7 @@ fn split(
     wiki_open: bool,
     about_open: bool,
     options_open: bool,
+    game2_open: bool,
 ) -> tauri::Result<Split> {
     let scale = host.scale_factor()?;
     let size = host.inner_size()?.to_logical::<f64>(scale);
@@ -1017,8 +1080,13 @@ fn split(
 
     let room_for_panel = (size.width - MIN_GAME_WIDTH - sidebar_w).max(0.0);
     let slim = about_open || options_open;
-    let panel_open = wiki_open || slim;
-    let want_panel = if panel_open {
+    let panel_open = wiki_open || slim || game2_open;
+    let want_panel = if game2_open {
+        // The second Granblue wants the width its OWN zoom needs -- it can be
+        // Small beside a Large game. A width the player dragged for the wiki
+        // has nothing to do with that, so `wiki_panel_w` is not consulted.
+        game2_column_width(host)
+    } else if panel_open {
         let chosen = host
             .app_handle()
             .state::<SidebarState>()
@@ -1032,7 +1100,14 @@ fn split(
     } else {
         0.0
     };
-    let wiki_w = if panel_open {
+    let wiki_w = if game2_open {
+        // NOT capped by the frame's leftover, for the same reason the game
+        // column is not: the resize `prepare_game2_open` just asked for has
+        // not landed when this runs, so the leftover still describes the OLD
+        // frame and would clamp a 721px view to ~368. State the width it
+        // needs and let the hug grow the frame to it.
+        want_panel
+    } else if panel_open {
         want_panel.min(room_for_panel)
     } else {
         0.0
@@ -1045,6 +1120,51 @@ fn split(
         sidebar_w,
         height: size.height,
     })
+}
+
+/// The width the mobile client needs, in window logical pixels.
+///
+/// `MIN_GAME_WIDTH` css at the zoom we set. `game_dpr` gives it exactly once
+/// Granblue has reported post-zoom; the floor covers the window before that,
+/// from the zoom we set ourselves.
+///
+/// Used for BOTH the game column and the second Granblue view, on purpose: two
+/// copies of this expression is how the column got the wrong width three times
+/// (see the notes at the `col` binding in `apply_layout`).
+fn game_column_width(host: &Window) -> f64 {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label();
+    let natural = css_to_window_logical(host, MIN_GAME_WIDTH, state.game_dpr(label));
+    let floor = MIN_GAME_WIDTH * state.page_zoom(label).max(1.0);
+    natural.max(floor)
+}
+
+/// The zoom the second Granblue view renders at. Independent of the game's,
+/// so you can watch a Small second view beside a Large main one.
+fn game2_zoom(host: &Window) -> f64 {
+    if host
+        .app_handle()
+        .state::<SidebarState>()
+        .is_game2_half()
+    {
+        1.0
+    } else {
+        2.0
+    }
+}
+
+/// Width the second view needs, in window logical pixels.
+///
+/// Derived from the game's own column by the ratio of their zooms rather than
+/// recomputed, so there is still ONE definition of "how wide is Granblue's
+/// mobile layout" (see `game_column_width`).
+fn game2_column_width(host: &Window) -> f64 {
+    let main_zoom = host
+        .app_handle()
+        .state::<SidebarState>()
+        .page_zoom(host.label())
+        .max(0.05);
+    game_column_width(host) * (game2_zoom(host) / main_zoom)
 }
 
 /// Ignore leftover smaller than this when hugging (rounding / DPI).
@@ -1479,6 +1599,16 @@ fn prepare_options_open(host: &Window) -> Result<String, String> {
     prepare_panel_open(host, ABOUT_W, ABOUT_MIN_W, "options")
 }
 
+/// Widen the window for a second Granblue.
+///
+/// Prefer and minimum are the SAME width -- the game's own column. The wiki can
+/// usefully fall back to a narrower tier; a Granblue squeezed below its layout
+/// cannot, it would just clip. Better to refuse and say so.
+fn prepare_game2_open(host: &Window) -> Result<String, String> {
+    let want = game2_column_width(host);
+    prepare_panel_open(host, want, want, "second view")
+}
+
 /// Hug About/Options to their own width after they have painted.
 ///
 /// Wiki → About/Options must not shrink in the same layout as the switch
@@ -1564,6 +1694,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let wiki_open = state.wiki_is_open(&label);
     let about_open = state.about_is_open(&label);
     let options_open = state.options_is_open(&label);
+    let game2_open = state.game2_is_open(&label);
     let locked = state.is_locked(&label);
     let automatic = state.is_automatic(&label);
     let outside = state.is_wiki_outside(&label);
@@ -1577,8 +1708,9 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let sidebar_nav = state.is_sidebar_nav();
     let multi_window = state.is_multi_window();
     let window_unlimited = state.is_window_unlimited();
+    let game2_half = state.is_game2_half();
     let hash_js = serde_json::to_string(&state.game_hash(&label)).unwrap_or_else(|_| "\"\"".into());
-    let s = split(host, collapsed, wiki_open, about_open, options_open)?;
+    let s = split(host, collapsed, wiki_open, about_open, options_open, game2_open)?;
     if s.height <= 0.0 {
         state.set_hug_busy(&label, false);
         return Ok("layout: minimized\n".into());
@@ -1596,7 +1728,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         if let Some(bar) = sidebar_webview(host) {
             let _ = bar.hide();
         }
-        for panel in [wiki_webview(host), panel_webview(host)] {
+        for panel in [wiki_webview(host), panel_webview(host), game2_webview(host)] {
             if let Some(p) = panel {
                 let _ = p.hide();
             }
@@ -1645,13 +1777,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     // clipped at a 160px viewport. The column states the width the game needs
     // and the hug grows the frame to it; `split()` already stops the sidebar
     // squeezing the game below MIN_GAME_WIDTH from the other side.
-    let col = if mobile {
-        let natural = css_to_window_logical(host, MIN_GAME_WIDTH, state.game_dpr(&label));
-        let floor = MIN_GAME_WIDTH * state.page_zoom(&label).max(1.0);
-        natural.max(floor)
-    } else {
-        col
-    };
+    let col = if mobile { game_column_width(host) } else { col };
     let edge = state.game_edge(&label);
     let want_w = col + s.wiki_w + s.sidebar_w;
 
@@ -1685,14 +1811,14 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
     let lock_fill = !GAME_SIZES_ITSELF && locked && edge > 1.0;
     let unlock_snap = !GAME_SIZES_ITSELF && !locked && snap_css(&state, &label) > 1.0;
-    let panel_open = wiki_open || about_open || options_open;
+    let panel_open = wiki_open || about_open || options_open || game2_open;
     // Unlocked: tile to the submenu overlay so Chat/Settings is flush with the
     // sidebar. A panel is always a sibling column.
     // The wiki keeps its webview once created, so a closed panel is hidden
     // rather than destroyed. That is the point of it being its own webview:
     // your page, scroll position and history survive being closed and
     // reopened, and survive the game reloading beside it.
-    let panel_w = if (wiki_open || about_open || options_open) && s.wiki_w > 0.0 {
+    let panel_w = if panel_open && s.wiki_w > 0.0 {
         s.wiki_w
     } else {
         0.0
@@ -1707,6 +1833,11 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     if !about_open && !options_open {
         if let Some(panel) = panel_webview(host) {
             out.push_str(&format!("panel hide={}\n", hide_panel(&panel)));
+        }
+    }
+    if !game2_open {
+        if let Some(g2) = game2_webview(host) {
+            out.push_str(&format!("game2 hide={}\n", hide_panel(&g2)));
         }
     }
     // The game webview gets the WHOLE frame only on the desktop client.
@@ -1790,6 +1921,32 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         }
     }
 
+    // A second Granblue in the panel slot. Same zoom as the game beside it, so
+    // both render the mobile client at the same scale; `split` gives it the
+    // same width for the same reason.
+    match game2_webview(host) {
+        None => out.push_str("game2: not created\n"),
+        Some(g2) => {
+            if game2_open && panel_w > 0.0 {
+                if mobile {
+                    let _ = g2.set_zoom(game2_zoom(host));
+                }
+                let p = g2.set_position(LogicalPosition::new(panel_x, 0.0));
+                let z = g2.set_size(LogicalSize::new(panel_w, s.height));
+                let v = g2.show();
+                out.push_str(&format!(
+                    "game2 pos={} size={} show={} now={}\n",
+                    result_word(&p),
+                    result_word(&z),
+                    result_word(&v),
+                    bounds_word(&g2),
+                ));
+            } else {
+                out.push_str(&format!("game2 hide={}\n", hide_panel(&g2)));
+            }
+        }
+    }
+
     // About and Options are one webview showing one of two pages.
     match panel_webview(host) {
         None => out.push_str("panel: not created\n"),
@@ -1813,7 +1970,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             // also asks gbf_panel_state on load because this eval can race
             // the About→Options navigation.
             let e = panel.eval(format!(
-                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window},windowUnlimited:{window_unlimited}}})"
+                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window},windowUnlimited:{window_unlimited},game2Half:{game2_half}}})"
             ));
             out.push_str(&format!("panel eval={}\n", result_word(&e)));
         }
@@ -1825,7 +1982,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window},gameHash:{hash_js}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window},game2Open:{game2_open},gameHash:{hash_js}}})"
             ));
             // show() is enough after desktop Automatic hid the rail. hide()
             // then show() blanks WebView2 white on every layout, twice when
@@ -1934,7 +2091,7 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     let host = window.as_ref().window();
     crate::app::window::restore_window_geometry(&host);
 
-    let sp = split(&host, false, false, false, false)?;
+    let sp = split(&host, false, false, false, false, false)?;
 
     // Served from the bundled assets as tauri://localhost/gbf-sidebar.html, so
     // it is trusted local content with a working IPC bridge. It is deliberately
@@ -1962,6 +2119,9 @@ pub fn attach(window: &WebviewWindow) -> tauri::Result<()> {
     }
     if let Err(error) = create_panel(&host, &sp) {
         eprintln!("[Pake][gbf] could not create the panel webview: {error}");
+    }
+    if let Err(error) = create_game2(&host, &sp) {
+        eprintln!("[Pake][gbf] could not create the second Granblue view: {error}");
     }
 
     // Restore lock before the first layout. Do not call set_lock(false) here:
@@ -2388,6 +2548,40 @@ fn with_shared_env<R: tauri::Runtime>(
     builder
 }
 
+/// The second Granblue view. Built with the wiki, blank and hidden.
+///
+/// Blank on purpose: `add_child` after startup does not return (see
+/// `ensure`-style notes on `gbf_new_window`), so every webview a window will
+/// ever need has to exist before the event loop settles. It costs an empty
+/// renderer until first use and navigates to Granblue on open.
+///
+/// It carries the SAME user agent as the game -- the generic-mobile navigator,
+/// not the iOS one -- so Granblue serves it the mobile client and does not take
+/// its `ios` path, which is what killed the menus on 2026-09-09.
+///
+/// No injected scripts. It is a viewer: the geometry reporting, drag-scroll and
+/// Alt shortcuts all belong to the real game webview, and a second reporter
+/// would fight the layout for the sidebar's position.
+fn create_game2(host: &Window, sp: &Split) -> tauri::Result<()> {
+    let label = game2_label(host.label());
+    let blank = Url::parse("about:blank").expect("about:blank parses");
+    host.add_child(
+        with_shared_env(
+            WebviewBuilder::new(&label, WebviewUrl::External(blank))
+                .user_agent(crate::app::sidebar::MOBILE_NAVIGATOR_USER_AGENT),
+            shared_data_dir(host),
+        ),
+        LogicalPosition::new(sp.game_w, 0.0),
+        LogicalSize::new(sp.game_w.max(1.0), sp.height),
+    )?;
+    if let Some(w) = game2_webview(host) {
+        let theme = host.app_handle().state::<SidebarState>().theme();
+        let _ = w.set_background_color(Some(theme_blank(&theme)));
+        let _ = w.hide();
+    }
+    Ok(())
+}
+
 fn create_wiki(host: &Window, sp: &Split) -> tauri::Result<()> {
     let label = wiki_label(host.label());
     let blank = Url::parse("about:blank").expect("about:blank parses");
@@ -2812,6 +3006,138 @@ pub fn gbf_wiki_back(window: Window) -> Result<(), String> {
     wiki.eval("history.back()").map_err(|e| e.to_string())
 }
 
+/// Open or close the second Granblue view.
+///
+/// It shares the panel slot, so opening it closes the wiki / About / Options,
+/// exactly as those close each other. On first open it navigates from
+/// `about:blank` to Granblue's front page -- the ORIGIN of whatever the game
+/// webview currently has, so a Steam session opens a Steam second view and a
+/// Japanese one opens the Japanese site, without another URL constant to keep
+/// in sync.
+#[tauri::command]
+pub fn gbf_game2_toggle(window: Window) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    let was_open = app.state::<SidebarState>().game2_is_open(&label);
+
+    if !was_open && panels_unavailable(&app, &label) {
+        return Ok(PANEL_NEEDS_FIXED_SIZE.to_string());
+    }
+
+    if was_open {
+        app.state::<SidebarState>().set_game2_open(&label, false);
+        app.state::<SidebarState>()
+            .restore_collapse_for_panel(&label);
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = label.clone();
+    app.run_on_main_thread(move || {
+        let mut out = String::new();
+        match handle.get_window(&win_label) {
+            Some(host) => {
+                if !was_open {
+                    // Widen FIRST, then open: the same order the wiki uses, so
+                    // a refusal leaves the state untouched.
+                    match prepare_game2_open(&host) {
+                        Ok(note) => {
+                            handle
+                                .state::<SidebarState>()
+                                .set_game2_open(&win_label, true);
+                            out.push_str(&note);
+                            if let Some(w) = game2_webview(&host) {
+                                let blank =
+                                    w.url().map(|u| u.scheme() == "about").unwrap_or(true);
+                                if blank {
+                                    // Same origin as the game, so a Steam
+                                    // session opens a Steam second view.
+                                    match game_webview(&host)
+                                        .and_then(|g| g.url().ok())
+                                        .and_then(|u| u.join("/").ok())
+                                    {
+                                        Some(url) => out.push_str(&format!(
+                                            "game2 navigate {} = {}\n",
+                                            url,
+                                            result_word(&w.navigate(url.clone()))
+                                        )),
+                                        None => out.push_str("game2: no URL to open\n"),
+                                    }
+                                }
+                            }
+                        }
+                        Err(note) => {
+                            out.push_str(&note);
+                            let _ = tx.send(out);
+                            return;
+                        }
+                    }
+                }
+                out.push_str(&layout_verbose(&host));
+            }
+            None => out.push_str(&format!("get_window({win_label}) -> None\n")),
+        }
+        let _ = tx.send(out);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    Ok(format!("game2Open={}\n{report}", !was_open))
+}
+
+/// Large or Small for the second view. Applies immediately if it is open.
+#[tauri::command]
+pub fn gbf_set_game2_half(window: Window, half: bool) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    app.state::<SidebarState>().set_game2_half(half);
+    persist_layout_state(&app);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = window.label().to_string();
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            // Re-open the slot at the new width: `prepare_game2_open` is what
+            // grows the frame, and the width changed.
+            Some(host) => {
+                let mut out = String::new();
+                if handle.state::<SidebarState>().game2_is_open(&win_label) {
+                    match prepare_game2_open(&host) {
+                        Ok(note) => out.push_str(&note),
+                        Err(note) => out.push_str(&note),
+                    }
+                }
+                out.push_str(&layout_verbose(&host));
+                out
+            }
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    Ok(format!("game2_half={half}\n{report}"))
+}
+
+/// Back inside the second Granblue view. Its own history, not the game's.
+#[tauri::command]
+pub fn gbf_game2_back(window: Window) -> Result<(), String> {
+    let g2 = game2_webview(&window).ok_or_else(|| "no second view".to_string())?;
+    g2.eval("history.back()").map_err(|e| e.to_string())
+}
+
+/// Reload the second Granblue view. Its own page, not the game's.
+#[tauri::command]
+pub fn gbf_game2_reload(window: Window) -> Result<(), String> {
+    let g2 = game2_webview(&window).ok_or_else(|| "no second view".to_string())?;
+    g2.eval("location.reload()").map_err(|e| e.to_string())
+}
+
 /// Send the wiki back to its front page.
 #[tauri::command]
 pub fn gbf_wiki_home(window: Window) -> Result<(), String> {
@@ -3050,6 +3376,8 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
         "sidebarNav": state.is_sidebar_nav(),
         "multiWindow": state.is_multi_window(),
         "windowUnlimited": state.is_window_unlimited(),
+        "game2Open": state.game2_is_open(label),
+        "game2Half": state.is_game2_half(),
         // The rest of what `setState` carries, so the SIDEBAR can ask for its
         // own state on load instead of waiting to be told. It renders its
         // desktop chrome by default and only hides it inside `setState`, so a
