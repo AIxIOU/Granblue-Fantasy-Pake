@@ -308,6 +308,18 @@ struct SavedLayout {
     /// Sidebar footer diagnostics strip. Process-wide. Default false.
     #[serde(default)]
     sidebar_debug: bool,
+    /// Back / Reload buttons in the sidebar. Process-wide. Default TRUE, hence
+    /// `default_sidebar_nav` rather than `#[serde(default)]` -- a layout file
+    /// written before this field existed must restore them shown, not hidden.
+    ///
+    /// These used to be forced off on the mobile client, because Granblue's own
+    /// mobile footer carries Back. That is now the player's call.
+    #[serde(default = "default_sidebar_nav")]
+    sidebar_nav: bool,
+}
+
+fn default_sidebar_nav() -> bool {
+    true
 }
 
 fn default_wiki_outside() -> bool {
@@ -351,6 +363,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 mobile_half: sidebar.is_mobile_half(),
                 theme: sidebar.theme(),
                 sidebar_debug: sidebar.is_sidebar_debug(),
+                sidebar_nav: sidebar.is_sidebar_nav(),
             },
         );
     }
@@ -444,6 +457,17 @@ pub fn restore_layout_sidebar_debug(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Back / Reload in the sidebar. Process-wide, like the tray flag.
+/// **Default on** -- absent from an older layout file means "shown".
+pub fn restore_layout_sidebar_nav(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.sidebar_nav)
+        .or_else(|| states.values().next().map(|s| s.sidebar_nav))
+        .unwrap_or(true)
+}
+
 #[derive(Default, Clone, Copy)]
 struct WindowFlags {
     collapsed: bool,
@@ -513,6 +537,7 @@ pub struct SidebarState {
     theme: Mutex<String>,
     /// Sidebar footer diagnostics. Process-wide. Default off.
     sidebar_debug: AtomicBool,
+    sidebar_nav: AtomicBool,
     /// Last `location.hash` read from the game webview. RAM only; used to
     /// highlight the matching sidebar nav row (same longest-prefix rule as
     /// shipping `markActive`).
@@ -566,6 +591,14 @@ impl SidebarState {
 
     pub fn is_sidebar_debug(&self) -> bool {
         self.sidebar_debug.load(Ordering::Relaxed)
+    }
+
+    pub fn is_sidebar_nav(&self) -> bool {
+        self.sidebar_nav.load(Ordering::Relaxed)
+    }
+
+    pub fn set_sidebar_nav(&self, on: bool) {
+        self.sidebar_nav.store(on, Ordering::Relaxed);
     }
 
     pub fn set_sidebar_debug(&self, on: bool) {
@@ -1485,6 +1518,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let theme = state.theme();
     let theme_js = theme_js(&theme);
     let sidebar_debug = state.is_sidebar_debug();
+    let sidebar_nav = state.is_sidebar_nav();
     let hash_js = serde_json::to_string(&state.game_hash(&label)).unwrap_or_else(|_| "\"\"".into());
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
@@ -1721,7 +1755,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             // also asks gbf_panel_state on load because this eval can race
             // the About→Options navigation.
             let e = panel.eval(format!(
-                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug}}})"
+                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav}}})"
             ));
             out.push_str(&format!("panel eval={}\n", result_word(&e)));
         }
@@ -1733,7 +1767,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF},sidebarDebug:{sidebar_debug},gameHash:{hash_js}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},gameHash:{hash_js}}})"
             ));
             // show() is enough after desktop Automatic hid the rail. hide()
             // then show() blanks WebView2 white on every layout, twice when
@@ -2937,6 +2971,7 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
         "mobile": state.is_mobile(label),
         "theme": state.theme(),
         "sidebarDebug": state.is_sidebar_debug(),
+        "sidebarNav": state.is_sidebar_nav(),
         // The rest of what `setState` carries, so the SIDEBAR can ask for its
         // own state on load instead of waiting to be told. It renders its
         // desktop chrome by default and only hides it inside `setState`, so a
@@ -3043,6 +3078,37 @@ pub fn gbf_set_sidebar_debug(window: Window, on: bool) -> Result<String, String>
         .recv_timeout(std::time::Duration::from_secs(8))
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
     Ok(format!("sidebar_debug={on}\n{report}"))
+}
+
+/// Show or hide the sidebar's Back / Reload buttons.
+///
+/// These were previously forced off on the mobile client, on the reasoning that
+/// Granblue's own mobile footer already carries Back. The maintainer wants them
+/// available on both clients, so the choice is theirs and it persists.
+/// `Alt+Left` / `Alt+R` are unaffected either way -- they are bound in
+/// `gbf-keys.js`, not to these buttons, and keep working when the row is hidden.
+#[tauri::command]
+pub fn gbf_set_sidebar_nav(window: Window, on: bool) -> Result<String, String> {
+    let app = window.app_handle().clone();
+    app.state::<SidebarState>().set_sidebar_nav(on);
+    persist_layout_state(&app);
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    let win_label = window.label().to_string();
+    app.run_on_main_thread(move || {
+        let report = match handle.get_window(&win_label) {
+            Some(host) => layout_verbose(&host),
+            None => format!("get_window({win_label}) -> None"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    let report = rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}"));
+    Ok(format!("sidebar_nav={on}\n{report}"))
 }
 
 #[tauri::command]

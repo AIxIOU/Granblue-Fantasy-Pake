@@ -163,6 +163,11 @@
   </button>
 
   <h2>Sidebar</h2>
+  <button type="button" class="choice" id="opt-nav">
+    <b>Back and Reload buttons</b>
+    <span>The row under the shortcuts. On by default. Alt+Left and Alt+R keep
+    working either way, so turning this off only hides the buttons.</span>
+  </button>
   <button type="button" class="choice" id="opt-debug">
     <b>Bottom debugger</b>
     <span>Diagnostics strip under Back and Reload. Click the strip to
@@ -182,13 +187,14 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside, tray, desktopClient, theme, sidebarDebug) {
+  function paint(outside, tray, desktopClient, theme, sidebarDebug, sidebarNav) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
     document.getElementById("opt-tray").classList.toggle("on", !!tray);
     document.getElementById("opt-mobile").classList.toggle("on", !desktopClient);
     document.getElementById("opt-desktop").classList.toggle("on", !!desktopClient);
     document.getElementById("opt-debug").classList.toggle("on", !!sidebarDebug);
+    document.getElementById("opt-nav").classList.toggle("on", !!sidebarNav);
     var t = theme || "midnight";
     document.documentElement.setAttribute("data-theme", t);
     var sel = document.getElementById("opt-theme");
@@ -198,11 +204,12 @@
   var desktopOn = false;
   var themeOn = "midnight";
   var debugOn = false;
+  var navOn = true;
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn, navOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn, navOn); });
   });
   document.getElementById("opt-theme").addEventListener("change", function () {
     themeOn = document.getElementById("opt-theme").value || "midnight";
@@ -214,6 +221,9 @@
   });
   document.getElementById("opt-debug").addEventListener("click", function () {
     invoke("gbf_set_sidebar_debug", { on: !debugOn });
+  });
+  document.getElementById("opt-nav").addEventListener("click", function () {
+    invoke("gbf_set_sidebar_nav", { on: !navOn });
   });
   // Switching client restarts the app: a webview's user agent can only be set
   // when it is built.
@@ -232,7 +242,8 @@
       desktopOn = !!st.desktopClient;
       themeOn = st.theme || "midnight";
       debugOn = !!st.sidebarDebug;
-      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn);
+      if (Object.prototype.hasOwnProperty.call(st, "sidebarNav")) navOn = !!st.sidebarNav;
+      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn, navOn);
     }
   };
   // Ask for our own state on load rather than waiting to be told.

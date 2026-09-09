@@ -332,6 +332,7 @@ pub fn run_app() {
             app::sidebar::gbf_set_wiki_outside,
             app::sidebar::gbf_set_theme,
             app::sidebar::gbf_set_sidebar_debug,
+            app::sidebar::gbf_set_sidebar_nav,
             app::sidebar::gbf_set_desktop_client,
             app::sidebar::gbf_set_mobile_half,
             app::setup::gbf_set_tray,
@@ -359,6 +360,12 @@ pub fn run_app() {
             let sidebar_debug = app::sidebar::restore_layout_sidebar_debug(app.app_handle());
             app.state::<app::sidebar::SidebarState>()
                 .set_sidebar_debug(sidebar_debug);
+            // Defaults ON, so this assignment matters: SidebarState::default()
+            // leaves the AtomicBool false, and without this the buttons would
+            // start hidden on every launch.
+            let sidebar_nav = app::sidebar::restore_layout_sidebar_nav(app.app_handle());
+            app.state::<app::sidebar::SidebarState>()
+                .set_sidebar_nav(sidebar_nav);
             app.manage(TrayRuntime {
                 icon_path: tray_icon_path.clone(),
                 init_fullscreen,

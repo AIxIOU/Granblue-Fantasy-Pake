@@ -206,8 +206,12 @@
   body.collapsed #actions .lbl { display: none; }
   body.collapsed .act-row { flex-direction: column; }
   body.collapsed #actions { padding: 6px 8px; }
-  /* Mobile Granblue already has Back. These only earn their keep on desktop. */
-  body.mobile #actions { display: none !important; }
+  /* Back / Reload visibility is the `hidden` attribute on #actions, set from
+     the sidebarNav option in setState -- deliberately NOT a second CSS rule.
+     The row was previously gated three ways at once (a class, the attribute,
+     and `hidden = isMobile`), which is how a change to one of them looked like
+     it had no effect. Hiding the row does not disable Alt+Left / Alt+R; those
+     are bound in gbf-keys.js. */
 
   #foot {
     flex: 0 0 auto; border-top: 1px solid var(--line);
@@ -582,8 +586,16 @@
       // Desktop: Layout (Lock to game). Mobile: Game size (Large / Small).
       var isMobile = !!st.mobile;
       document.body.classList.toggle("mobile", isMobile);
+      // Back / Reload. Driven ONLY by the option, on both clients. It used
+      // to be `hidden = isMobile`, since Granblue's mobile footer has its own
+      // Back; that is the player's call now. Absent from the push means leave
+      // it shown -- only an explicit false hides it.
       var actions = document.getElementById("actions");
-      if (actions) actions.hidden = isMobile;
+      if (actions) {
+        actions.hidden = Object.prototype.hasOwnProperty.call(st, "sidebarNav")
+          ? !st.sidebarNav
+          : false;
+      }
       var layoutSec = document.getElementById("sec-layout");
       if (layoutSec) layoutSec.hidden = isMobile;
       if (l) {
