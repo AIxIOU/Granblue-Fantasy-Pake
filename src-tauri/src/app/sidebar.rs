@@ -2598,16 +2598,81 @@ fn with_shared_env<R: tauri::Runtime>(
 /// not the iOS one -- so Granblue serves it the mobile client and does not take
 /// its `ios` path, which is what killed the menus on 2026-09-09.
 ///
-/// No injected scripts. It is a viewer: the geometry reporting, drag-scroll and
-/// Alt shortcuts all belong to the real game webview, and a second reporter
-/// would fight the layout for the sidebar's position.
+/// ONE injected rule, and only one: hide the scrollbar. Same rule Pake's
+/// `style.js` already gives the game webview, which is why the game has no bar
+/// and this otherwise would.
+///
+/// # Why widening the column instead does not work
+///
+/// Tried first, on the reasoning that a scrollable area is expected to show a
+/// bar, so the column should simply hold it. Measured 2026-09-09, it cannot:
+/// Granblue's mobile `#wrapper` FOLLOWS the viewport rather than sitting at a
+/// fixed `MIN_GAME_WIDTH`. Adding 17px for the bar took the viewport to 336,
+/// the wrapper grew to 336 to match, and the bar ate into that -- 16px of
+/// horizontal overflow and a horizontal scrollbar underneath. The clip became
+/// an overflow. There is no width that settles, because the page moves with it.
+///
+/// Hiding the bar is the only stable point: viewport 320, wrapper 320, column
+/// 320, nothing eaten. Wheel and drag scrolling still work; only the bar goes,
+/// exactly as in the game beside it.
+///
+/// # And drag-to-scroll, because the bar is gone
+///
+/// Hiding the bar removes the only visible way to scroll, so `custom.js` comes
+/// with it: that is Rule 0 exception 1 (drag-to-scroll) and 4 (`dragstart` on
+/// img/a), the same pair the game webview gets. It is pure page behaviour --
+/// no IPC, no `__TAURI__`, no geometry reporting -- so it cannot fight the
+/// layout for the sidebar's position. Its `inert()` gate reads
+/// `window.__gbfInert`, which is undefined here, and undefined counts as not
+/// inert, so the exceptions are simply active.
+///
+/// STILL NOT injected: `gbf-edge.js` (a second geometry reporter would fight
+/// the sidebar's position) and `gbf-keys.js` (the Alt shortcuts drive the real
+/// game, and this view has its own Back and Reload in the sidebar).
+const GAME2_HIDE_SCROLLBAR: &str = r#"(function () {
+  // Both properties: `scrollbar-width` is the standard one, the -webkit- rule
+  // is what Pake's style.js uses for the game. Either alone was enough when
+  // tested by hand; keeping both costs nothing and survives a Chromium change.
+  var CSS = "html{scrollbar-width:none !important}" +
+            "html::-webkit-scrollbar{display:none !important}";
+  function add() {
+    try {
+      // At document-start there may be no head AND no documentElement yet.
+      // The first version of this appended to that null, threw, and took the
+      // DOMContentLoaded fallback registration down with it -- so the style
+      // was never added at all and the bar stayed. Measured 2026-09-09.
+      var root = document.head || document.documentElement;
+      if (!root) return false;
+      if (document.getElementById("gbf-g2-nosb")) return true;
+      var el = document.createElement("style");
+      el.id = "gbf-g2-nosb";
+      el.textContent = CSS;
+      root.appendChild(el);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  if (!add()) {
+    document.addEventListener("DOMContentLoaded", add);
+    // Granblue rebuilds its document as it boots; poll briefly rather than
+    // trust one event.
+    var n = 0;
+    var t = setInterval(function () {
+      if (add() || ++n > 100) clearInterval(t);
+    }, 50);
+  }
+})();"#;
+
 fn create_game2(host: &Window, sp: &Split) -> tauri::Result<()> {
     let label = game2_label(host.label());
     let blank = Url::parse("about:blank").expect("about:blank parses");
     host.add_child(
         with_shared_env(
             WebviewBuilder::new(&label, WebviewUrl::External(blank))
-                .user_agent(crate::app::sidebar::MOBILE_NAVIGATOR_USER_AGENT),
+                .user_agent(crate::app::sidebar::MOBILE_NAVIGATOR_USER_AGENT)
+                .initialization_script(GAME2_HIDE_SCROLLBAR)
+                .initialization_script(include_str!("../inject/custom.js")),
             shared_data_dir(host),
         ),
         LogicalPosition::new(sp.game_w, 0.0),
