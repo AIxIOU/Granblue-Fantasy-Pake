@@ -583,26 +583,12 @@ fn build_window(
     // the desktop client reloads on every resize under Automatic Resizing.
     // Switching clients still restarts the app (see `gbf_set_desktop_client`).
     //
-    // `navigator.userAgent` comes from this string.
-    //
-    // CHANGED 2026-09-09 at the maintainer's request: Windows used to be
-    // excluded here, so navigator stayed desktop Chrome and only the HTTP
-    // document header was iOS. They asked for the mobile client to present as
-    // iOS Safari everywhere, not half and half, so Windows now takes the same
-    // branch as the other platforms.
-    //
-    // What this deliberately gives up: navigator being desktop Chrome is what
-    // made Granblue's Menu open `#setting/pc` (which carries Window Size)
-    // rather than `#setting/sp`. On the mobile client the app sizes the game
-    // with webview zoom and never uses Granblue's Window Size, so that section
-    // was not load-bearing here -- but it is a real behaviour change and it is
-    // why the old code looked the way it did. The desktop client is untouched.
-    //
-    // It also means every request carries the iOS UA, not just documents. That
-    // is what "believe it is iOS" requires; see `attach_request_only_mobile_ua`
-    // for the narrower rule this supersedes on Windows.
+    // `navigator.userAgent` comes from this string. On Windows the mobile
+    // client is requested separately, by rewriting the HTTP User-Agent header
+    // (Thorium + Speed Tweaks), so navigator can stay desktop Chrome and Menu
+    // opens `#setting/pc` with Window Size instead of `#setting/sp`.
     let desktop_client = crate::app::sidebar::restore_layout_desktop_client(app);
-    let user_agent = if desktop_client {
+    let user_agent = if desktop_client || cfg!(target_os = "windows") {
         config.user_agent.get().clone()
     } else {
         crate::app::sidebar::MOBILE_USER_AGENT.to_string()

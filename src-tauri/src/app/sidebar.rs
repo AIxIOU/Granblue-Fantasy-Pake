@@ -71,26 +71,8 @@ pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
 /// inject and not a Rule 0 traffic rewrite. On Windows it is the HTTP document
 /// header only; `navigator.userAgent` stays the desktop Chrome string from
 /// `pake.json` (Thorium / Speed Tweaks), so Menu opens `#setting/pc`.
-///
-/// # The OS token is FROZEN and is not a mistake
-///
-/// `18_7_8` looks stale beside `Version/26.0`, and updating it "to match" would
-/// be wrong. From iOS 26 onwards Apple pins the OS token in Safari's user agent
-/// to the last iOS 18 release and never moves it again, to cut fingerprinting
-/// surface. A real iPhone on iOS 26 sends exactly this shape: an iOS 18 OS
-/// token and the true Safari version in `Version/`. An iPhone on iOS 27 will
-/// send the same frozen OS token with `Version/27.x`.
-///
-/// So the ONLY part worth bumping here is `Version/`. Verified 2026-09-09
-/// against three independent sources (51degrees, Niels Leenheer,
-/// whatismybrowser), which agree on the freeze and on `Version/26.0`.
-///
-/// Safari 27 was announced at WWDC 2026 for a fall 2026 release, but no
-/// attested iOS 27 string could be found on 2026-09-09, so this stays on the
-/// newest string that is actually documented rather than one guessed from the
-/// pattern.
 pub const MOBILE_USER_AGENT: &str =
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1";
 
 /// Shown when a panel is asked for while the desktop client is on Automatic
 /// Resizing. That mode is a bare window: no sidebar, no panels.
