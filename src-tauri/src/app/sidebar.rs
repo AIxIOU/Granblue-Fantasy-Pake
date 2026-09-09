@@ -1626,13 +1626,33 @@ fn prepare_game2_open(host: &Window) -> Result<String, String> {
 /// still show a dark seam — not the wiki jumping into the game.
 const PANEL_SLIM_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// The width the currently open panel should settle at, once it has painted.
+///
+/// `prepare_panel_open` deliberately keeps a WIDER leftover when switching from
+/// a bigger panel, so the incoming one covers the outgoing one instead of
+/// flashing. This is what gives that width back afterwards. A panel missing
+/// from here keeps the stale leftover forever -- which is what left the second
+/// Granblue view with 361px of dead window beside it when switched from Large
+/// to Small (reported 2026-09-09).
+fn slim_panel_target(host: &Window) -> Option<f64> {
+    let state = host.app_handle().state::<SidebarState>();
+    let label = host.label();
+    if state.about_is_open(label) || state.options_is_open(label) {
+        Some(ABOUT_W)
+    } else if state.game2_is_open(label) {
+        Some(game2_column_width(host))
+    } else {
+        None
+    }
+}
+
 fn schedule_slim_panel_hug(host: &Window) {
     let state = host.app_handle().state::<SidebarState>();
     let label = host.label().to_string();
-    if !(state.about_is_open(&label) || state.options_is_open(&label)) {
+    let Some(target) = slim_panel_target(host) else {
         return;
-    }
-    if state.wiki_panel_w(&label) <= ABOUT_W + WIKI_TIER_SLACK {
+    };
+    if state.wiki_panel_w(&label) <= target + WIKI_TIER_SLACK {
         return;
     }
     let gen = state.bump_panel_fit_gen(&label);
@@ -1648,13 +1668,16 @@ fn schedule_slim_panel_hug(host: &Window) {
             if state.wiki_is_open(&label) {
                 return;
             }
-            if !(state.about_is_open(&label) || state.options_is_open(&label)) {
-                return;
-            }
             let Some(host) = app_main.get_window(&label) else {
                 return;
             };
-            state.set_wiki_panel_w(&label, ABOUT_W);
+            // Re-derive rather than reuse: the open panel can change while we
+            // sleep, and settling to the wrong panel's tier is worse than not
+            // settling at all.
+            let Some(target) = slim_panel_target(&host) else {
+                return;
+            };
+            state.set_wiki_panel_w(&label, target);
             let _ = layout(&host);
         });
     });
@@ -3090,6 +3113,9 @@ pub fn gbf_game2_toggle(window: Window) -> Result<String, String> {
                     }
                 }
                 out.push_str(&layout_verbose(&host));
+                // prepare_panel_open may have kept a wider leftover to cover
+                // the panel this one replaced; give it back once painted.
+                schedule_slim_panel_hug(&host);
             }
             None => out.push_str(&format!("get_window({win_label}) -> None\n")),
         }
@@ -3126,6 +3152,8 @@ pub fn gbf_set_game2_half(window: Window, half: bool) -> Result<String, String> 
                     }
                 }
                 out.push_str(&layout_verbose(&host));
+                // The tier changed, so the reserved width is now stale.
+                schedule_slim_panel_hug(&host);
                 out
             }
             None => format!("get_window({win_label}) -> None"),
