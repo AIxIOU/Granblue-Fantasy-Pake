@@ -322,6 +322,10 @@
     { label: "Wiki", cmd: "gbf_wiki_toggle", id: "nav-wiki", icon: "⊞", key: "W" },
 
     { section: "App" },
+    // Hidden unless Options allows extra windows. Opening one takes a while --
+    // the command does not reply until the new window's sidebar is attached --
+    // so the row reports progress rather than looking dead.
+    { label: "New window", cmd: "gbf_new_window", id: "nav-newwin", icon: "⧉" },
     { label: "Options", cmd: "gbf_options_toggle", id: "nav-options", icon: "⚙" },
     { label: "About", cmd: "gbf_about_toggle", id: "nav-about", icon: "ⓘ" }
   ];
@@ -590,6 +594,10 @@
       // to be `hidden = isMobile`, since Granblue's mobile footer has its own
       // Back; that is the player's call now. Absent from the push means leave
       // it shown -- only an explicit false hides it.
+      if (Object.prototype.hasOwnProperty.call(st, "multiWindow")) {
+        var nw = document.getElementById("nav-newwin");
+        if (nw) nw.hidden = !st.multiWindow;
+      }
       var actions = document.getElementById("actions");
       if (actions) {
         actions.hidden = Object.prototype.hasOwnProperty.call(st, "sidebarNav")

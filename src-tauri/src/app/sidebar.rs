@@ -316,12 +316,22 @@ struct SavedLayout {
     /// mobile footer carries Back. That is now the player's call.
     #[serde(default = "default_sidebar_nav")]
     sidebar_nav: bool,
-    /// Extra app windows (tray "New Window"). Process-wide. **Default false.**
-    /// The build config also carries a `multi_window` flag; this persisted
-    /// choice is what the app actually honours, so the two can disagree and
-    /// this one wins.
-    #[serde(default)]
+    /// Extra app windows (tray and sidebar "New Window"). Process-wide.
+    /// **Default true.** The build config also carries a `multi_window` flag;
+    /// this persisted choice is what the app actually honours, so the two can
+    /// disagree and this one wins.
+    #[serde(default = "default_multi_window")]
     multi_window: bool,
+    /// Lift the cap on how many extra windows may exist. **Default false**,
+    /// meaning ONE extra window beside the main one. Each window carries a
+    /// full set of webviews (game, sidebar, wiki, panel), so the cap is there
+    /// to stop a stray double-click quietly tripling the app's memory.
+    #[serde(default)]
+    window_unlimited: bool,
+}
+
+fn default_multi_window() -> bool {
+    true
 }
 
 fn default_sidebar_nav() -> bool {
@@ -371,6 +381,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 sidebar_debug: sidebar.is_sidebar_debug(),
                 sidebar_nav: sidebar.is_sidebar_nav(),
                 multi_window: sidebar.is_multi_window(),
+                window_unlimited: sidebar.is_window_unlimited(),
             },
         );
     }
@@ -464,14 +475,23 @@ pub fn restore_layout_sidebar_debug(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// Extra app windows. Process-wide. **Default off** -- the maintainer's call,
-/// and it is what an older layout file without the field restores to.
+/// Extra app windows. Process-wide. **Default on.**
 pub fn restore_layout_multi_window(app: &AppHandle) -> bool {
     let states = load_layout_states(app);
     states
         .get("pake")
         .map(|s| s.multi_window)
         .or_else(|| states.values().next().map(|s| s.multi_window))
+        .unwrap_or(true)
+}
+
+/// Lift the one-extra-window cap. Process-wide. **Default off.**
+pub fn restore_layout_window_unlimited(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.window_unlimited)
+        .or_else(|| states.values().next().map(|s| s.window_unlimited))
         .unwrap_or(false)
 }
 
@@ -557,6 +577,7 @@ pub struct SidebarState {
     sidebar_debug: AtomicBool,
     sidebar_nav: AtomicBool,
     multi_window: AtomicBool,
+    window_unlimited: AtomicBool,
     /// Last `location.hash` read from the game webview. RAM only; used to
     /// highlight the matching sidebar nav row (same longest-prefix rule as
     /// shipping `markActive`).
@@ -610,6 +631,14 @@ impl SidebarState {
 
     pub fn is_sidebar_debug(&self) -> bool {
         self.sidebar_debug.load(Ordering::Relaxed)
+    }
+
+    pub fn is_window_unlimited(&self) -> bool {
+        self.window_unlimited.load(Ordering::Relaxed)
+    }
+
+    pub fn set_window_unlimited(&self, on: bool) {
+        self.window_unlimited.store(on, Ordering::Relaxed);
     }
 
     pub fn is_multi_window(&self) -> bool {
@@ -1547,6 +1576,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let sidebar_debug = state.is_sidebar_debug();
     let sidebar_nav = state.is_sidebar_nav();
     let multi_window = state.is_multi_window();
+    let window_unlimited = state.is_window_unlimited();
     let hash_js = serde_json::to_string(&state.game_hash(&label)).unwrap_or_else(|_| "\"\"".into());
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
@@ -1783,7 +1813,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             // also asks gbf_panel_state on load because this eval can race
             // the About→Options navigation.
             let e = panel.eval(format!(
-                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window}}})"
+                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window},windowUnlimited:{window_unlimited}}})"
             ));
             out.push_str(&format!("panel eval={}\n", result_word(&e)));
         }
@@ -1795,7 +1825,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             let p = bar.set_position(LogicalPosition::new(bar_x, 0.0));
             let z = bar.set_size(LogicalSize::new(s.sidebar_w, s.height));
             let e = bar.eval(format!(
-                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},gameHash:{hash_js}}})"
+                "window.__gbfSidebar && window.__gbfSidebar.setState({{collapsed:{collapsed},wikiOpen:{wiki_open},aboutOpen:{about_open},optionsOpen:{options_open},locked:{locked},wikiOutside:{outside},mobile:{mobile},mobileHalf:{mobile_half},theme:{theme_js},gameSizesItself:{GAME_SIZES_ITSELF},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window},gameHash:{hash_js}}})"
             ));
             // show() is enough after desktop Automatic hid the rail. hide()
             // then show() blanks WebView2 white on every layout, twice when
@@ -2217,8 +2247,21 @@ pub fn gbf_toggle_app_windows(app: AppHandle) -> Result<String, String> {
 /// without finding the tray icon (same reason as `gbf_toggle_app_windows`).
 #[tauri::command]
 pub fn gbf_new_window(app: AppHandle) -> Result<String, String> {
-    if !app.state::<SidebarState>().is_multi_window() {
-        return Ok("NOTICE Multiple windows are off. Turn them on in Options.".into());
+    {
+        let state = app.state::<SidebarState>();
+        if !state.is_multi_window() {
+            return Ok("NOTICE Multiple windows are off. Turn them on in Options.".into());
+        }
+        if !state.is_window_unlimited() {
+            // One EXTRA window beside the main one, so two in total. Every
+            // window costs a full set of webviews -- game, sidebar, wiki,
+            // panel -- so an accidental double-click should not quietly
+            // triple the app's memory. Options lifts the cap.
+            let extras = app.windows().len().saturating_sub(1);
+            if extras >= 1 {
+                return Ok("NOTICE One extra window at a time. Remove the limit in Options.".into());
+            }
+        }
     }
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
@@ -3006,6 +3049,7 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
         "sidebarDebug": state.is_sidebar_debug(),
         "sidebarNav": state.is_sidebar_nav(),
         "multiWindow": state.is_multi_window(),
+        "windowUnlimited": state.is_window_unlimited(),
         // The rest of what `setState` carries, so the SIDEBAR can ask for its
         // own state on load instead of waiting to be told. It renders its
         // desktop chrome by default and only hides it inside `setState`, so a
@@ -3154,6 +3198,14 @@ pub fn gbf_set_multi_window(app: AppHandle, on: bool) -> Result<String, String> 
     Ok(rx
         .recv_timeout(std::time::Duration::from_secs(8))
         .unwrap_or_else(|e| format!("main thread never replied: {e}")))
+}
+
+/// Lift or restore the one-extra-window cap.
+#[tauri::command]
+pub fn gbf_set_window_unlimited(app: AppHandle, on: bool) -> Result<String, String> {
+    app.state::<SidebarState>().set_window_unlimited(on);
+    persist_layout_state(&app);
+    Ok(format!("window_unlimited={on}"))
 }
 
 /// Show or hide the sidebar's Back / Reload buttons.

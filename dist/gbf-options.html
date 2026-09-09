@@ -162,6 +162,12 @@
     open beside the first. Each window gets its own sidebar and panels. Off by
     default.</span>
   </button>
+  <button type="button" class="choice" id="opt-nolimit">
+    <b>No window limit</b>
+    <span>By default one extra window can be open at a time. Lifting the cap
+    allows any number &mdash; each one runs its own game, sidebar and panels, so
+    they are not cheap.</span>
+  </button>
   <button type="button" class="choice" id="opt-tray">
     <b>System tray</b>
     <span>Icon in the notification area. Off by default. With it off,
@@ -193,7 +199,7 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside, tray, desktopClient, theme, sidebarDebug, sidebarNav, multiWindow) {
+  function paint(outside, tray, desktopClient, theme, sidebarDebug, sidebarNav, multiWindow, noLimit) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
     document.getElementById("opt-tray").classList.toggle("on", !!tray);
@@ -202,6 +208,10 @@
     document.getElementById("opt-debug").classList.toggle("on", !!sidebarDebug);
     document.getElementById("opt-nav").classList.toggle("on", !!sidebarNav);
     document.getElementById("opt-multiwin").classList.toggle("on", !!multiWindow);
+    var nolimit = document.getElementById("opt-nolimit");
+    nolimit.classList.toggle("on", !!noLimit);
+    // The cap only means anything while extra windows are allowed at all.
+    nolimit.hidden = !multiWindow;
     var t = theme || "midnight";
     document.documentElement.setAttribute("data-theme", t);
     var sel = document.getElementById("opt-theme");
@@ -213,11 +223,12 @@
   var debugOn = false;
   var navOn = true;
   var multiWinOn = false;
+  var noLimitOn = false;
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn); });
   });
   document.getElementById("opt-theme").addEventListener("change", function () {
     themeOn = document.getElementById("opt-theme").value || "midnight";
@@ -235,6 +246,9 @@
   });
   document.getElementById("opt-multiwin").addEventListener("click", function () {
     invoke("gbf_set_multi_window", { on: !multiWinOn });
+  });
+  document.getElementById("opt-nolimit").addEventListener("click", function () {
+    invoke("gbf_set_window_unlimited", { on: !noLimitOn });
   });
   // Switching client restarts the app: a webview's user agent can only be set
   // when it is built.
@@ -255,7 +269,8 @@
       debugOn = !!st.sidebarDebug;
       if (Object.prototype.hasOwnProperty.call(st, "sidebarNav")) navOn = !!st.sidebarNav;
       if (Object.prototype.hasOwnProperty.call(st, "multiWindow")) multiWinOn = !!st.multiWindow;
-      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn);
+      if (Object.prototype.hasOwnProperty.call(st, "windowUnlimited")) noLimitOn = !!st.windowUnlimited;
+      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn, noLimitOn);
     }
   };
   // Ask for our own state on load rather than waiting to be told.
