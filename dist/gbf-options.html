@@ -184,16 +184,16 @@
   costs considerably more than a second view does.</p>
   <button type="button" class="choice" id="opt-mw-off">
     <b>Off</b>
-    <span>One window. Default.</span>
+    <span>One window, and <b>New window</b> does not appear at all. Default.</span>
   </button>
-  <button type="button" class="choice" id="opt-mw-on">
-    <b>On</b>
-    <span>Adds <b>New window</b> to the sidebar and to the tray menu.</span>
+  <button type="button" class="choice" id="opt-mw-one">
+    <b>On, one extra window</b>
+    <span>Adds <b>New window</b> to the sidebar and the tray, capped at one
+    extra so a stray double-click cannot multiply the app.</span>
   </button>
-  <button type="button" class="choice" id="opt-nolimit">
-    <b>No window limit</b>
-    <span>By default one extra window can be open at a time. Lifting the cap
-    allows any number &mdash; each one runs its own game, sidebar and panels, so
+  <button type="button" class="choice" id="opt-mw-many">
+    <b>On, no limit</b>
+    <span>As many as you open. Each runs its own game, sidebar and panels, so
     they are not cheap.</span>
   </button>
 
@@ -237,14 +237,12 @@
     document.getElementById("opt-desktop").classList.toggle("on", !!desktopClient);
     document.getElementById("opt-debug").classList.toggle("on", !!sidebarDebug);
     document.getElementById("opt-nav").classList.toggle("on", !!sidebarNav);
-    document.getElementById("opt-mw-on").classList.toggle("on", !!multiWindow);
+    // One three-way choice over two stored flags: off / on+capped / on+uncapped.
     document.getElementById("opt-mw-off").classList.toggle("on", !multiWindow);
+    document.getElementById("opt-mw-one").classList.toggle("on", !!multiWindow && !noLimit);
+    document.getElementById("opt-mw-many").classList.toggle("on", !!multiWindow && !!noLimit);
     document.getElementById("opt-g2-large").classList.toggle("on", !g2Half);
     document.getElementById("opt-g2-small").classList.toggle("on", !!g2Half);
-    var nolimit = document.getElementById("opt-nolimit");
-    nolimit.classList.toggle("on", !!noLimit);
-    // The cap only means anything while extra windows are allowed at all.
-    nolimit.hidden = !multiWindow;
     var t = theme || "midnight";
     document.documentElement.setAttribute("data-theme", t);
     var sel = document.getElementById("opt-theme");
@@ -278,13 +276,23 @@
   document.getElementById("opt-nav").addEventListener("click", function () {
     invoke("gbf_set_sidebar_nav", { on: !navOn });
   });
-  document.getElementById("opt-mw-on").addEventListener("click", function () {
-    if (multiWinOn) return;
-    invoke("gbf_set_multi_window", { on: true });
-  });
+  // Each choice states BOTH flags rather than assuming the other is already
+  // right, so arriving from any state lands correctly. The cap is set first:
+  // gbf_set_multi_window rebuilds the tray, so it goes last and sees the final
+  // pair.
+  function setWindows(on, unlimited) {
+    invoke("gbf_set_window_unlimited", { on: unlimited })
+      .then(function () { return invoke("gbf_set_multi_window", { on: on }); })
+      .catch(function () {});
+  }
   document.getElementById("opt-mw-off").addEventListener("click", function () {
-    if (!multiWinOn) return;
-    invoke("gbf_set_multi_window", { on: false });
+    setWindows(false, false);
+  });
+  document.getElementById("opt-mw-one").addEventListener("click", function () {
+    setWindows(true, false);
+  });
+  document.getElementById("opt-mw-many").addEventListener("click", function () {
+    setWindows(true, true);
   });
   document.getElementById("opt-g2-large").addEventListener("click", function () {
     if (!g2HalfOn) return;
@@ -293,9 +301,6 @@
   document.getElementById("opt-g2-small").addEventListener("click", function () {
     if (g2HalfOn) return;
     invoke("gbf_set_game2_half", { half: true });
-  });
-  document.getElementById("opt-nolimit").addEventListener("click", function () {
-    invoke("gbf_set_window_unlimited", { on: !noLimitOn });
   });
   // Switching client restarts the app: a webview's user agent can only be set
   // when it is built.
