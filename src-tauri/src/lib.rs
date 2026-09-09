@@ -204,7 +204,12 @@ pub fn run_app() {
     let want_start_to_tray = pake_config.windows[0].start_to_tray;
     let tray_icon_path = pake_config.system_tray_path.clone();
     let multi_instance = pake_config.multi_instance;
-    let multi_window = pake_config.multi_window;
+    // pake.json's `multi_window` is deliberately NOT read here any more. The
+    // persisted per-user choice replaces it and defaults off; it is loaded in
+    // the setup hook below, before the tray and menu are built from it.
+    // (macOS native window tabbing in window.rs still consults the config
+    // flag, which is a different question -- how windows group, not whether
+    // extra ones may exist.)
     let _enable_find = pake_config.windows[0].enable_find;
     let startup_window_revealed = Arc::new(AtomicBool::new(false));
 
@@ -333,6 +338,7 @@ pub fn run_app() {
             app::sidebar::gbf_set_theme,
             app::sidebar::gbf_set_sidebar_debug,
             app::sidebar::gbf_set_sidebar_nav,
+            app::sidebar::gbf_set_multi_window,
             app::sidebar::gbf_set_desktop_client,
             app::sidebar::gbf_set_mobile_half,
             app::setup::gbf_set_tray,
@@ -366,6 +372,12 @@ pub fn run_app() {
             let sidebar_nav = app::sidebar::restore_layout_sidebar_nav(app.app_handle());
             app.state::<app::sidebar::SidebarState>()
                 .set_sidebar_nav(sidebar_nav);
+            // The persisted choice wins over pake.json's build-time flag, and
+            // it defaults OFF. Read before the tray and menu are constructed,
+            // since both take it by value.
+            let multi_window = app::sidebar::restore_layout_multi_window(app.app_handle());
+            app.state::<app::sidebar::SidebarState>()
+                .set_multi_window(multi_window);
             app.manage(TrayRuntime {
                 icon_path: tray_icon_path.clone(),
                 init_fullscreen,

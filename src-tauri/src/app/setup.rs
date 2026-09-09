@@ -131,12 +131,14 @@ pub fn gbf_set_tray(app: AppHandle, on: bool) -> Result<String, String> {
         .set_tray_enabled(on);
     crate::app::sidebar::persist_layout_state(&app);
 
-    let (icon_path, init_fullscreen, multi_window, startup_revealed) = {
+    let multi_window = app
+        .state::<crate::app::sidebar::SidebarState>()
+        .is_multi_window();
+    let (icon_path, init_fullscreen, startup_revealed) = {
         let rt = app.state::<TrayRuntime>();
         (
             rt.icon_path.clone(),
             rt.init_fullscreen,
-            rt.multi_window,
             rt.startup_revealed.clone(),
         )
     };

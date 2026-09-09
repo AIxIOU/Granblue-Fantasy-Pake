@@ -156,6 +156,12 @@
   </button>
 
   <h2>Desktop</h2>
+  <button type="button" class="choice" id="opt-multiwin">
+    <b>Multiple windows</b>
+    <span>Adds New Window to the tray menu, so you can keep a second Granblue
+    open beside the first. Each window gets its own sidebar and panels. Off by
+    default.</span>
+  </button>
   <button type="button" class="choice" id="opt-tray">
     <b>System tray</b>
     <span>Icon in the notification area. Off by default. With it off,
@@ -187,7 +193,7 @@
     if (!t || !t.core || !t.core.invoke) return Promise.reject(new Error("no IPC"));
     return t.core.invoke(cmd, args || {});
   }
-  function paint(outside, tray, desktopClient, theme, sidebarDebug, sidebarNav) {
+  function paint(outside, tray, desktopClient, theme, sidebarDebug, sidebarNav, multiWindow) {
     document.getElementById("opt-inside").classList.toggle("on", !outside);
     document.getElementById("opt-outside").classList.toggle("on", !!outside);
     document.getElementById("opt-tray").classList.toggle("on", !!tray);
@@ -195,6 +201,7 @@
     document.getElementById("opt-desktop").classList.toggle("on", !!desktopClient);
     document.getElementById("opt-debug").classList.toggle("on", !!sidebarDebug);
     document.getElementById("opt-nav").classList.toggle("on", !!sidebarNav);
+    document.getElementById("opt-multiwin").classList.toggle("on", !!multiWindow);
     var t = theme || "midnight";
     document.documentElement.setAttribute("data-theme", t);
     var sel = document.getElementById("opt-theme");
@@ -205,11 +212,12 @@
   var themeOn = "midnight";
   var debugOn = false;
   var navOn = true;
+  var multiWinOn = false;
   document.getElementById("opt-inside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn, navOn); });
+    invoke("gbf_set_wiki_outside", { outside: false }).then(function () { paint(false, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn); });
   });
   document.getElementById("opt-outside").addEventListener("click", function () {
-    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn, navOn); });
+    invoke("gbf_set_wiki_outside", { outside: true }).then(function () { paint(true, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn); });
   });
   document.getElementById("opt-theme").addEventListener("change", function () {
     themeOn = document.getElementById("opt-theme").value || "midnight";
@@ -224,6 +232,9 @@
   });
   document.getElementById("opt-nav").addEventListener("click", function () {
     invoke("gbf_set_sidebar_nav", { on: !navOn });
+  });
+  document.getElementById("opt-multiwin").addEventListener("click", function () {
+    invoke("gbf_set_multi_window", { on: !multiWinOn });
   });
   // Switching client restarts the app: a webview's user agent can only be set
   // when it is built.
@@ -243,7 +254,8 @@
       themeOn = st.theme || "midnight";
       debugOn = !!st.sidebarDebug;
       if (Object.prototype.hasOwnProperty.call(st, "sidebarNav")) navOn = !!st.sidebarNav;
-      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn, navOn);
+      if (Object.prototype.hasOwnProperty.call(st, "multiWindow")) multiWinOn = !!st.multiWindow;
+      paint(!!st.wikiOutside, trayOn, desktopOn, themeOn, debugOn, navOn, multiWinOn);
     }
   };
   // Ask for our own state on load rather than waiting to be told.

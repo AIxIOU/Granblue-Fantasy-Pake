@@ -316,6 +316,12 @@ struct SavedLayout {
     /// mobile footer carries Back. That is now the player's call.
     #[serde(default = "default_sidebar_nav")]
     sidebar_nav: bool,
+    /// Extra app windows (tray "New Window"). Process-wide. **Default false.**
+    /// The build config also carries a `multi_window` flag; this persisted
+    /// choice is what the app actually honours, so the two can disagree and
+    /// this one wins.
+    #[serde(default)]
+    multi_window: bool,
 }
 
 fn default_sidebar_nav() -> bool {
@@ -364,6 +370,7 @@ pub fn persist_layout_state(app: &AppHandle) {
                 theme: sidebar.theme(),
                 sidebar_debug: sidebar.is_sidebar_debug(),
                 sidebar_nav: sidebar.is_sidebar_nav(),
+                multi_window: sidebar.is_multi_window(),
             },
         );
     }
@@ -457,6 +464,17 @@ pub fn restore_layout_sidebar_debug(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Extra app windows. Process-wide. **Default off** -- the maintainer's call,
+/// and it is what an older layout file without the field restores to.
+pub fn restore_layout_multi_window(app: &AppHandle) -> bool {
+    let states = load_layout_states(app);
+    states
+        .get("pake")
+        .map(|s| s.multi_window)
+        .or_else(|| states.values().next().map(|s| s.multi_window))
+        .unwrap_or(false)
+}
+
 /// Back / Reload in the sidebar. Process-wide, like the tray flag.
 /// **Default on** -- absent from an older layout file means "shown".
 pub fn restore_layout_sidebar_nav(app: &AppHandle) -> bool {
@@ -538,6 +556,7 @@ pub struct SidebarState {
     /// Sidebar footer diagnostics. Process-wide. Default off.
     sidebar_debug: AtomicBool,
     sidebar_nav: AtomicBool,
+    multi_window: AtomicBool,
     /// Last `location.hash` read from the game webview. RAM only; used to
     /// highlight the matching sidebar nav row (same longest-prefix rule as
     /// shipping `markActive`).
@@ -591,6 +610,14 @@ impl SidebarState {
 
     pub fn is_sidebar_debug(&self) -> bool {
         self.sidebar_debug.load(Ordering::Relaxed)
+    }
+
+    pub fn is_multi_window(&self) -> bool {
+        self.multi_window.load(Ordering::Relaxed)
+    }
+
+    pub fn set_multi_window(&self, on: bool) {
+        self.multi_window.store(on, Ordering::Relaxed);
     }
 
     pub fn is_sidebar_nav(&self) -> bool {
@@ -1519,6 +1546,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
     let theme_js = theme_js(&theme);
     let sidebar_debug = state.is_sidebar_debug();
     let sidebar_nav = state.is_sidebar_nav();
+    let multi_window = state.is_multi_window();
     let hash_js = serde_json::to_string(&state.game_hash(&label)).unwrap_or_else(|_| "\"\"".into());
     let s = split(host, collapsed, wiki_open, about_open, options_open)?;
     if s.height <= 0.0 {
@@ -1755,7 +1783,7 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
             // also asks gbf_panel_state on load because this eval can race
             // the About→Options navigation.
             let e = panel.eval(format!(
-                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav}}})"
+                "document.documentElement.setAttribute('data-theme', {theme_js}); window.__gbfOptions && window.__gbfOptions.setState({{wikiOutside:{outside},tray:{tray},desktopClient:{desktop_client},mobile:{mobile},theme:{theme_js},sidebarDebug:{sidebar_debug},sidebarNav:{sidebar_nav},multiWindow:{multi_window}}})"
             ));
             out.push_str(&format!("panel eval={}\n", result_word(&e)));
         }
@@ -2189,28 +2217,33 @@ pub fn gbf_toggle_app_windows(app: AppHandle) -> Result<String, String> {
 /// without finding the tray icon (same reason as `gbf_toggle_app_windows`).
 #[tauri::command]
 pub fn gbf_new_window(app: AppHandle) -> Result<String, String> {
+    if !app.state::<SidebarState>().is_multi_window() {
+        return Ok("NOTICE Multiple windows are off. Turn them on in Options.".into());
+    }
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         let report = match crate::app::window::open_additional_window(&app) {
-            Ok(window) => {
-                let opened = window.label().to_string();
-                let host = window.as_ref().window();
-                let mut labels: Vec<String> = app.windows().keys().cloned().collect();
-                labels.sort();
-                let webviews: Vec<String> = host
-                    .webviews()
-                    .iter()
-                    .map(|w| w.label().to_string())
-                    .collect();
-                format!("opened={opened} windows()={labels:?} webviews={webviews:?}")
-            }
+            // Report the label and nothing else. This used to enumerate
+            // `app.windows()` and `host.webviews()` for diagnostics, and that
+            // enumeration is what made the command hang: measured 2026-09-09,
+            // the window and its sidebar were up in a few seconds while the
+            // reply had not arrived after 40, so a working feature reported
+            // failure. Use `gbf_debug` from the new window if you want the
+            // inventory; do not put it back here.
+            Ok(window) => format!("opened={}", window.label()),
             Err(error) => format!("open_additional_window ERR {error}"),
         };
         let _ = tx.send(report);
     });
+    // 12s was too short: measured 2026-09-09, the window opened with its
+    // sidebar, wiki and panel intact while this timed out and reported
+    // "never replied". A slow attach is not a failure, and saying it is sends
+    // the next person hunting a bug that is not there.
     Ok(rx
-        .recv_timeout(std::time::Duration::from_secs(12))
-        .unwrap_or_else(|e| format!("new window never replied: {e}")))
+        .recv_timeout(std::time::Duration::from_secs(40))
+        .unwrap_or_else(|e| {
+            format!("new window still opening after 40s ({e}); it may still appear")
+        }))
 }
 
 /// Create the wiki webview, blank and hidden, during `attach()`.
@@ -2972,6 +3005,7 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
         "theme": state.theme(),
         "sidebarDebug": state.is_sidebar_debug(),
         "sidebarNav": state.is_sidebar_nav(),
+        "multiWindow": state.is_multi_window(),
         // The rest of what `setState` carries, so the SIDEBAR can ask for its
         // own state on load instead of waiting to be told. It renders its
         // desktop chrome by default and only hides it inside `setState`, so a
@@ -3078,6 +3112,48 @@ pub fn gbf_set_sidebar_debug(window: Window, on: bool) -> Result<String, String>
         .recv_timeout(std::time::Duration::from_secs(8))
         .unwrap_or_else(|e| format!("main thread never replied: {e}"));
     Ok(format!("sidebar_debug={on}\n{report}"))
+}
+
+/// Allow or forbid extra app windows.
+///
+/// Rebuilds the tray so its "New Window" entry follows immediately -- no
+/// restart, unlike the client switch. Off by default.
+#[tauri::command]
+pub fn gbf_set_multi_window(app: AppHandle, on: bool) -> Result<String, String> {
+    app.state::<SidebarState>().set_multi_window(on);
+    persist_layout_state(&app);
+
+    let tray_on = app.state::<SidebarState>().is_tray_enabled();
+    let (icon_path, init_fullscreen, startup_revealed) = {
+        let rt = app.state::<crate::app::setup::TrayRuntime>();
+        (
+            rt.icon_path.clone(),
+            rt.init_fullscreen,
+            rt.startup_revealed.clone(),
+        )
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let report = match crate::app::setup::set_system_tray(
+            &handle,
+            tray_on,
+            &icon_path,
+            init_fullscreen,
+            on,
+            startup_revealed,
+        ) {
+            Ok(()) => format!("multi_window={on} tray={tray_on}"),
+            Err(error) => format!("multi_window={on} tray rebuild ERR {error}"),
+        };
+        let _ = tx.send(report);
+    })
+    .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+
+    Ok(rx
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|e| format!("main thread never replied: {e}")))
 }
 
 /// Show or hide the sidebar's Back / Reload buttons.
