@@ -40,15 +40,24 @@
     --badge-ink: #061210;
   }
   [hidden] { display: none !important; }
+  /* ONE scrollbar, the document's.
+
+     This page used to show two side by side: `html, body` were `height: 100%`
+     and the content div was `height: 100%` PLUS padding, without border-box.
+     Padding therefore pushed the div past the viewport, so the body scrolled
+     AND the div scrolled. Two bars, nested, on every panel.
+
+     Fixed by making the document the only scroller: no height on html/body, no
+     height or overflow on the content div, and border-box so padding stops
+     adding to declared sizes. The sidebar already did it this way. */
+  * { box-sizing: border-box; }
   html, body {
-    margin: 0; height: 100%;
+    margin: 0;
     background: var(--bg); color: var(--fg);
     font: 13px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif;
   }
   #gbf-options-body {
     padding: 18px 22px 26px;
-    overflow-y: auto;
-    height: 100%;
   }
   #gbf-options-body > * { max-width: 420px; }
   h1 {
@@ -169,12 +178,17 @@
     main game on a narrower screen.</span>
   </button>
 
-  <h2>Desktop</h2>
-  <button type="button" class="choice" id="opt-multiwin">
-    <b>Multiple windows</b>
-    <span>Adds New Window to the tray menu, so you can keep a second Granblue
-    open beside the first. Each window gets its own sidebar and panels. Off by
-    default.</span>
+  <h2>Multiple windows</h2>
+  <p class="lede">A whole extra window, separate from the sidebar's
+  <b>Second view</b>. Each one runs its own game, sidebar and panels, so it
+  costs considerably more than a second view does.</p>
+  <button type="button" class="choice" id="opt-mw-off">
+    <b>Off</b>
+    <span>One window. Default.</span>
+  </button>
+  <button type="button" class="choice" id="opt-mw-on">
+    <b>On</b>
+    <span>Adds <b>New window</b> to the sidebar and to the tray menu.</span>
   </button>
   <button type="button" class="choice" id="opt-nolimit">
     <b>No window limit</b>
@@ -182,6 +196,8 @@
     allows any number &mdash; each one runs its own game, sidebar and panels, so
     they are not cheap.</span>
   </button>
+
+  <h2>Desktop</h2>
   <button type="button" class="choice" id="opt-tray">
     <b>System tray</b>
     <span>Icon in the notification area. Off by default. With it off,
@@ -221,7 +237,8 @@
     document.getElementById("opt-desktop").classList.toggle("on", !!desktopClient);
     document.getElementById("opt-debug").classList.toggle("on", !!sidebarDebug);
     document.getElementById("opt-nav").classList.toggle("on", !!sidebarNav);
-    document.getElementById("opt-multiwin").classList.toggle("on", !!multiWindow);
+    document.getElementById("opt-mw-on").classList.toggle("on", !!multiWindow);
+    document.getElementById("opt-mw-off").classList.toggle("on", !multiWindow);
     document.getElementById("opt-g2-large").classList.toggle("on", !g2Half);
     document.getElementById("opt-g2-small").classList.toggle("on", !!g2Half);
     var nolimit = document.getElementById("opt-nolimit");
@@ -261,8 +278,13 @@
   document.getElementById("opt-nav").addEventListener("click", function () {
     invoke("gbf_set_sidebar_nav", { on: !navOn });
   });
-  document.getElementById("opt-multiwin").addEventListener("click", function () {
-    invoke("gbf_set_multi_window", { on: !multiWinOn });
+  document.getElementById("opt-mw-on").addEventListener("click", function () {
+    if (multiWinOn) return;
+    invoke("gbf_set_multi_window", { on: true });
+  });
+  document.getElementById("opt-mw-off").addEventListener("click", function () {
+    if (!multiWinOn) return;
+    invoke("gbf_set_multi_window", { on: false });
   });
   document.getElementById("opt-g2-large").addEventListener("click", function () {
     if (!g2HalfOn) return;

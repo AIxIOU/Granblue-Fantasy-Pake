@@ -42,16 +42,24 @@
     --heading-line: rgba(62,207,178,0.35);
     --badge-ink: #061210;
   }
+  /* ONE scrollbar, the document's.
+
+     This page used to show two side by side: `html, body` were `height: 100%`
+     and the content div was `height: 100%` PLUS padding, without border-box.
+     Padding therefore pushed the div past the viewport, so the body scrolled
+     AND the div scrolled. Two bars, nested, on every panel.
+
+     Fixed by making the document the only scroller: no height on html/body, no
+     height or overflow on the content div, and border-box so padding stops
+     adding to declared sizes. The sidebar already did it this way. */
   * { box-sizing: border-box; }
   html, body {
-    margin: 0; height: 100%;
+    margin: 0;
     background: var(--bg); color: var(--fg);
     font: 13px/1.55 Georgia, "Times New Roman", serif;
   }
   #gbf-about-body {
     padding: 18px 22px 26px;
-    overflow-y: auto;
-    height: 100%;
   }
   #gbf-about-body > * { max-width: 620px; }
   h1 {
