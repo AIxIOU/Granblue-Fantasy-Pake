@@ -1376,7 +1376,16 @@ fn sidebar_want(collapsed: bool) -> f64 {
 
 /// Width the open panel asked for, not the leftover `split()` could steal.
 fn reserved_panel_w(state: &SidebarState, label: &str, split_panel: f64) -> f64 {
-    if !(state.wiki_is_open(label) || state.about_is_open(label) || state.options_is_open(label)) {
+    // EVERY panel that occupies the slot belongs here, the second Granblue
+    // view included. Leaving it out returned 0 while that view was open, so
+    // `maybe_hug_window` targeted the NO-PANEL frame width, shrank the window
+    // back, and left the view sitting outside it: on screen it blinked once
+    // and vanished. Reported 2026-09-09.
+    if !(state.wiki_is_open(label)
+        || state.about_is_open(label)
+        || state.options_is_open(label)
+        || state.game2_is_open(label))
+    {
         return 0.0;
     }
     let reserved = state.wiki_panel_w(label);
@@ -1790,10 +1799,17 @@ fn apply_layout(host: &Window) -> tauri::Result<String> {
         WIKI_MIN_W
     } else if about_open || options_open {
         ABOUT_MIN_W
+    } else if game2_open {
+        // It cannot be squeezed: a Granblue narrower than its own layout just
+        // clips. Its minimum is its width.
+        game2_column_width(host)
     } else {
         0.0
     };
-    if (wiki_open || about_open || options_open) && panel_min > 0.0 && s.wiki_w + 1.0 >= panel_min {
+    if (wiki_open || about_open || options_open || game2_open)
+        && panel_min > 0.0
+        && s.wiki_w + 1.0 >= panel_min
+    {
         let scale = host.scale_factor()?;
         let inner_w = host.inner_size()?.to_logical::<f64>(scale).width;
         let want = col + s.wiki_w + s.sidebar_w;
