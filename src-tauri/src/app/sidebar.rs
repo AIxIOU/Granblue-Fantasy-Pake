@@ -69,10 +69,47 @@ pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
 ///
 /// Exception 6: this string asks the server for that client. It is not a page
 /// inject and not a Rule 0 traffic rewrite. On Windows it is the HTTP document
-/// header only; `navigator.userAgent` stays the desktop Chrome string from
-/// `pake.json` (Thorium / Speed Tweaks), so Menu opens `#setting/pc`.
+/// header only -- `navigator.userAgent` is set separately, and since
+/// 2026-09-09 it is [`MOBILE_NAVIGATOR_USER_AGENT`], not this string and no
+/// longer desktop Chrome either. Which client is SERVED follows this header;
+/// how Granblue then BEHAVES follows navigator. Keep them separable.
 pub const MOBILE_USER_AGENT: &str =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1";
+
+/// EXPERIMENT 2026-09-09: what `navigator.userAgent` says on Windows.
+///
+/// Three identities are possible and each fails differently:
+///
+/// | navigator | client served | Granblue's menus |
+/// |---|---|---|
+/// | desktop Chrome | mobile | work, but a dead Window Size control appears |
+/// | iOS Safari | mobile | **dead** -- body gets `ios` |
+/// | **generic Android mobile** | **mobile** | **work, and no dead control** |
+///
+/// The `ios` body class is added by Granblue's own CLIENT-SIDE sniffing, not by
+/// the server: with the iOS document header and a desktop navigator the body
+/// stayed plain `shellapp`. So the class follows `navigator.userAgent`, while
+/// which client is served follows the document header. Those being separable is
+/// the whole trick -- this identity is mobile enough to drop the desktop
+/// pretence and the phantom Window Size control with it, without arming
+/// whatever the `ios` path does.
+///
+/// **What is NOT known:** why the `ios` identity kills the menus. An earlier
+/// note here blamed Granblue withdrawing click handlers, citing 7 -> 1 on
+/// `document.body`. That was wrong -- it compared `#setting/pc` against
+/// `#mypage`, and the counts are a property of the PAGE, not the identity. Same
+/// page, all three identities give the same profile (`#mypage` 1 click / 11 tap
+/// / 15 touchstart; `#setting/pc` 6-7 click). So the mechanism is still open,
+/// and this configuration rests on the maintainer confirming the menus work
+/// rather than on a theory. If it ever regresses, do not trust handler counts
+/// to explain it.
+///
+/// Chrome's real Android string has been frozen at "Android 10; K" since
+/// Chrome 110 for the same anti-fingerprinting reason Apple froze theirs, so
+/// this is the current shape rather than an invented one. The Chrome version
+/// matches the WebView2 runtime actually rendering the page.
+pub const MOBILE_NAVIGATOR_USER_AGENT: &str =
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36";
 
 /// Shown when a panel is asked for while the desktop client is on Automatic
 /// Resizing. That mode is a bare window: no sidebar, no panels.

@@ -587,9 +587,16 @@ fn build_window(
     // client is requested separately, by rewriting the HTTP User-Agent header
     // (Thorium + Speed Tweaks), so navigator can stay desktop Chrome and Menu
     // opens `#setting/pc` with Window Size instead of `#setting/sp`.
+    // EXPERIMENT 2026-09-09: on Windows the mobile client's navigator is a
+    // GENERIC ANDROID MOBILE string rather than desktop Chrome. The document
+    // header stays iOS (that is what fetches the mobile client); only the
+    // client-side identity changes, because Granblue's `ios` handling keys off
+    // navigator, not off what was served. See MOBILE_NAVIGATOR_USER_AGENT.
     let desktop_client = crate::app::sidebar::restore_layout_desktop_client(app);
-    let user_agent = if desktop_client || cfg!(target_os = "windows") {
+    let user_agent = if desktop_client {
         config.user_agent.get().clone()
+    } else if cfg!(target_os = "windows") {
+        crate::app::sidebar::MOBILE_NAVIGATOR_USER_AGENT.to_string()
     } else {
         crate::app::sidebar::MOBILE_USER_AGENT.to_string()
     };
@@ -993,11 +1000,15 @@ fn build_window(
 /// client then runs. Do not "fix" this filter as a network-rewrite violation.
 ///
 /// Thorium / Speed Tweaks: only `main_frame` / `sub_frame` get the iOS header,
-/// so `navigator.userAgent` stays the desktop Chrome string from `pake.json`.
-/// `.user_agent(iOS)` would set both. XHR stays desktop so `#setting/pc` can
-/// include Window Size. Filtering every resource type hid that section and
-/// would be intercepting the session — do not widen the filter. Wiki / About /
-/// Options never match these hosts.
+/// so `navigator.userAgent` is free to say something else. `.user_agent(iOS)`
+/// would set both, and setting both is what broke Granblue's menus on
+/// 2026-09-09 — see `MOBILE_NAVIGATOR_USER_AGENT`. Do not widen this filter to
+/// other resource types either: that intercepts the session rather than asking
+/// for a client. Wiki / About / Options never match these hosts.
+///
+/// The old note here said XHR must stay desktop so `#setting/pc` could include
+/// Window Size. That section is gone now, deliberately: it was a control that
+/// did nothing, because the client actually running was the mobile one.
 #[cfg(target_os = "windows")]
 fn attach_request_only_mobile_ua(window: &WebviewWindow, then_navigate: Option<String>) {
     if let Err(error) = window.with_webview(move |webview| {
