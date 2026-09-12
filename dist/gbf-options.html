@@ -355,6 +355,11 @@
     var dl = document.getElementById("opt-build-list");
     dl.textContent = "";
     row(dl, "Version", (v.name || "?") + " " + (v.version || "?"));
+    // Build number and commit together: the number says WHICH build in order,
+    // the commit says exactly which source. Two builds of the same commit
+    // differ only by the time below.
+    var build = (v.buildNumber || "?") + " · " + (v.commit || "unknown");
+    row(dl, "Build", build, String(v.commit || "").indexOf("+dirty") !== -1 ? "warn" : null);
     var when = "unknown";
     if (v.builtEpoch) {
       var d = new Date(v.builtEpoch * 1000);

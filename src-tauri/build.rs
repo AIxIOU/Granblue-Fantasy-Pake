@@ -19,13 +19,31 @@ fn stamp_build_identity() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
 
+    // CONTENT differences only. `git status --porcelain` was used here first
+    // and reported this tree permanently dirty: Cargo.toml differs from the
+    // index by line endings alone, so every build carried a "+dirty" that meant
+    // nothing. `git diff --quiet` compares after normalisation, so a CRLF-only
+    // difference is clean and a real edit is not.
     let dirty = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
+        .args(["diff", "--quiet", "HEAD"])
+        .status()
+        .ok()
+        .map(|st| !st.success())
+        .unwrap_or(false);
+
+    // A monotonic build number: commits on this branch. It rises with every
+    // commit, so a larger number is a later build, which "3.15.7" cannot tell
+    // you -- every build this month carries that same version.
+    let number = std::process::Command::new("git")
+        .args(["rev-list", "--count", "HEAD"])
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false);
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "0".to_string());
+    println!("cargo:rustc-env=GBF_BUILD_NUMBER={number}");
 
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

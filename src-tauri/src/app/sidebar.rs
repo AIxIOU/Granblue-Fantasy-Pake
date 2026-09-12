@@ -3522,6 +3522,9 @@ pub fn gbf_version(window: Window) -> Result<serde_json::Value, String> {
         "name": info.name,
         "version": info.version.to_string(),
         "identifier": app.config().identifier,
+        // Commits on the branch: monotonic, so a bigger number is a later
+        // build. The version alone cannot say that.
+        "buildNumber": env!("GBF_BUILD_NUMBER"),
         "commit": env!("GBF_BUILD_COMMIT"),
         // Seconds since the epoch. The page formats it as local time.
         "builtEpoch": env!("GBF_BUILD_EPOCH").parse::<u64>().unwrap_or(0),
