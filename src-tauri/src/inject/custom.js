@@ -1,4 +1,4 @@
-// EXPERIMENT ONLY. Injected into the GAME webview.
+// Injected into the GAME webview.
 //
 // Drag-to-scroll is Rule 0 exception 1, copied from gbf-scaler.js with the
 // same boundary: overflow-y + scrollHeight, scrollTop only, time-bounded

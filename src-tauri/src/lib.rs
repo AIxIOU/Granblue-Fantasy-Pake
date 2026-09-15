@@ -32,8 +32,7 @@ use app::{
     },
     setup::{set_global_shortcut, set_system_tray, TrayRuntime},
     window::{
-        open_additional_window_safe, reapply_window_icon, reveal_built_window, save_last_url,
-        set_window, MultiWindowState,
+        reapply_window_icon, reveal_built_window, save_last_url, set_window, MultiWindowState,
     },
 };
 use util::get_pake_config;
@@ -323,7 +322,7 @@ pub fn run_app() {
             update_theme_mode,
             set_zoom,
             webview_navigate,
-            // EXPERIMENT ONLY -- native sidebar. Not on main.
+            // Native sidebar.
             app::sidebar::gbf_nav,
             app::sidebar::gbf_game_back,
             app::sidebar::gbf_game_reload,
@@ -415,7 +414,7 @@ pub fn run_app() {
             // --- Menu Construction End ---
 
             let window = set_window(app.app_handle(), &pake_config, &tauri_config)?;
-            // EXPERIMENT ONLY: add the sidebar webview beside the game and
+            // Add the sidebar webview beside the game and
             // narrow the game to fit. A failure here must not stop the app --
             // without it you simply get the plain wrapper with no sidebar,
             // which is still a usable client and a useful datapoint.

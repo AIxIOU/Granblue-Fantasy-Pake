@@ -1,7 +1,7 @@
-//! EXPERIMENT ONLY -- native sidebar as a sibling webview.
+//! Native sidebar as a sibling webview.
 //!
 //! Not on `main`, not in any release.
-//! See EXPERIMENT-native-sidebar/GBF_Pake_EXPERIMENT_NATIVE_SIDEBAR.md.
+//! See tools/GBF_Pake_NATIVE_SIDEBAR.md.
 //!
 //! # What this is testing
 //!
@@ -21,7 +21,7 @@
 //!
 //! # Rule 0
 //!
-//! Stronger here than on main, not weaker. The game webview gets a viewport and
+//! Stronger here than in the old v1 wrapper, not weaker. The game webview gets a viewport and
 //! nothing else: no injected chrome, no edge measurement, no DOM writes. The one
 //! thing we send into it is `location.hash = "..."` on a nav click, which is
 //! what clicking Granblue's own menu does.
@@ -44,7 +44,7 @@
 //! rather than a detail of this module: `hide_all_app_windows`,
 //! `show_all_app_windows` and `any_app_window_visible` used to enumerate
 //! `app.webview_windows()`. They, plus the matching `get_webview_window`
-//! lookups, were ported to `app.windows()` / `get_window` in this experiment
+//! lookups, were ported to `app.windows()` / `get_window` in this app
 //! so tray Hide/Show and the activation shortcut can work. That port is an
 //! upstream-file patch and must be documented if it ever ships.
 
@@ -76,7 +76,7 @@ pub const SIDEBAR_W_COLLAPSED: f64 = 52.0;
 pub const MOBILE_USER_AGENT: &str =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1";
 
-/// EXPERIMENT 2026-09-09: what `navigator.userAgent` says on Windows.
+/// 2026-09-09: what `navigator.userAgent` says on Windows.
 ///
 /// Three identities are possible and each fails differently:
 ///
@@ -2428,7 +2428,7 @@ pub fn gbf_debug(window: Window) -> Result<String, String> {
 }
 
 /// Drive the same Hide/Show path the tray uses, so it can be verified without
-/// finding the tray icon. Experiment diagnostic only.
+/// finding the tray icon. Diagnostic only.
 #[tauri::command]
 pub fn gbf_toggle_app_windows(app: AppHandle) -> Result<String, String> {
     let before = crate::app::window::any_app_window_visible(&app);
@@ -3532,10 +3532,8 @@ pub fn gbf_open_link(app: AppHandle, which: String) -> Result<(), String> {
 /// commit and the build time are what actually identify a binary, so they are
 /// stamped in by `build.rs` and reported here.
 ///
-/// `identifier` is included deliberately. It is the ONLY thing separating this
-/// from the shipping client now that the product name no longer says
-/// EXPERIMENT, and it is what keeps the two installs and their logins apart.
-/// A rail that invisible is worth printing where someone will see it.
+/// `identifier` is included deliberately: it decides where logins and settings
+/// are stored, and it is what keeps the Steam and JP installs apart.
 #[tauri::command]
 pub fn gbf_version(window: Window) -> Result<serde_json::Value, String> {
     let app = window.app_handle();

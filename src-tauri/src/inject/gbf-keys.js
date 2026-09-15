@@ -1,4 +1,4 @@
-// EXPERIMENT ONLY. Alt-modified shortcuts (Rule 0 exception 5) so they fire
+// Alt-modified shortcuts (Rule 0 exception 5) so they fire
 // in whichever webview has focus — game, wiki, About, or Options — not only the sidebar.
 (function () {
   if (window.__gbfNativeKeys) return;

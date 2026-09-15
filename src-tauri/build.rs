@@ -1,4 +1,4 @@
-/// EXPERIMENT. Stamp identity into the binary so the running app can say which
+/// Stamp identity into the binary so the running app can say which
 /// build it is.
 ///
 /// The version alone does not answer that: every build on a given day carries

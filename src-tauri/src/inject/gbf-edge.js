@@ -1,4 +1,4 @@
-// EXPERIMENT ONLY. Read Granblue's #wrapper and submenu overlay so Rust can
+// Read Granblue's #wrapper and submenu overlay so Rust can
 // snap the native sidebar. Rule 0: this only *reads* geometry.
 //
 // Desktop client + Automatic Resizing is a NATIVE mode: nothing of ours runs

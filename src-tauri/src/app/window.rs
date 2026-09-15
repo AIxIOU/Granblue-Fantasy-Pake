@@ -1,6 +1,6 @@
 use crate::app::config::PakeConfig;
 
-/// EXPERIMENT. The `additional_browser_args` string given to the main window,
+/// The `additional_browser_args` string given to the main window,
 /// captured at creation so child webviews can reuse it byte-for-byte.
 ///
 /// WebView2 keys an environment on the user-data folder **and** its options.
@@ -637,7 +637,7 @@ fn build_window(
     // client is requested separately, by rewriting the HTTP User-Agent header
     // (Thorium + Speed Tweaks), so navigator can stay desktop Chrome and Menu
     // opens `#setting/pc` with Window Size instead of `#setting/sp`.
-    // EXPERIMENT 2026-09-09: on Windows the mobile client's navigator is a
+    // 2026-09-09: on Windows the mobile client's navigator is a
     // GENERIC ANDROID MOBILE string rather than desktop Chrome. The document
     // header stays iOS (that is what fetches the mobile client); only the
     // client-side identity changes, because Granblue's `ios` handling keys off
@@ -798,12 +798,12 @@ fn build_window(
         .initialization_script(include_str!("../inject/event.js"))
         .initialization_script(include_str!("../inject/style.js"))
         .initialization_script(include_str!("../inject/theme_refresh.js"))
-        .initialization_script(include_str!("../inject/auth.js"))
+        // auth.js is injected above for all frames (upstream 3.16.x moved it).
         .initialization_script(include_str!("../inject/custom.js"))
-        // EXPERIMENT: Alt shortcuts in the game webview (also attached to
-        // wiki/about child webviews in sidebar.rs). Not on main.
+        // Alt shortcuts in the game webview (also attached to
+        // wiki/about child webviews in sidebar.rs).
         .initialization_script(include_str!("../inject/gbf-keys.js"))
-        // EXPERIMENT: read #wrapper's right edge (Rule 0: geometry only).
+        // Read #wrapper's right edge (Rule 0: geometry only).
         .initialization_script(include_str!("../inject/gbf-edge.js"));
 
     #[cfg(target_os = "windows")]
