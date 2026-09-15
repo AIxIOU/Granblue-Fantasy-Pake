@@ -89,31 +89,46 @@
     letter-spacing: .5px; color: var(--badge-ink); background: var(--accent);
     padding: 2px 5px; border-radius: 3px; vertical-align: middle;
   }
+  .tech { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+  .tech li { margin: 3px 0; }
 </style>
 <div id="gbf-about-body">
   <h1>Granblue Fantasy nPake <span class="badge">NATIVE</span></h1>
-  <p class="lede">A desktop wrapper for Granblue Fantasy. This build is an
-  experiment: the sidebar, the wiki and this page live in their own webviews
-  beside the game, not inside Granblue's document. The game itself runs
-  exactly as Cygames served it — nothing here modifies it.</p>
+  <p class="lede">Granblue Fantasy in its own window, with a handy sidebar and
+  a built-in wiki. Smoother, lighter and more convenient than playing in a web
+  browser. The game itself is never changed.</p>
 
-  <h2>Two clients</h2>
-  <p class="lede">Granblue serves two different clients, and Options chooses
-  which one to ask for. Switching restarts the app.</p>
+  <h2>Better than a browser tab</h2>
   <ul>
-    <li><b>Mobile (the default).</b> A lighter client with no chat column,
-    laid out at a fixed width. It never reloads when you resize the window,
-    which is why it is the default. <b>Game size</b> in the sidebar picks
-    Large or Small — that is this app zooming its own webview, not a Granblue
-    setting.</li>
-    <li><b>Desktop.</b> The PC client, with its own Window Size settings in
-    Granblue. <b>Layout / Lock</b> appears only here.</li>
+    <li><b>Runs lighter.</b> A browser loads Granblue's PC version. This app
+    uses the phone version by default, which is simpler and easier on your
+    computer.</li>
+    <li><b>No reloading when you resize.</b> Resize or snap the window and the
+    game stays exactly where it was.</li>
+    <li><b>Everything in one place.</b> Shortcuts, the wiki and a second game
+    view sit right beside the game, with no tabs to juggle.</li>
+    <li><b>Just the game.</b> No address bar, tabs or browser clutter.</li>
+  </ul>
+
+  <h2>Features</h2>
+  <ul>
+    <li><b>Sidebar shortcuts</b> jump straight to Home, Quests, Raids, Party
+    and more. The one you're on lights up.</li>
+    <li><b>Back and Reload</b> buttons for the game, under the shortcuts.</li>
+    <li><b>Game size:</b> pick Large or Small in the sidebar.</li>
+    <li><b>Built-in wiki.</b> Look things up without leaving the game. It
+    remembers the page you were on.</li>
+    <li><b>Second view.</b> Open a second Granblue beside the first, in the
+    same window, with its own Back and Reload.</li>
+    <li><b>Extra windows</b> <i>(Options)</i>. Open another full window if you
+    need one. Off by default.</li>
+    <li><b>Three colour themes</b> for the app: Midnight, Ember and Tide.</li>
+    <li><b>Hide the sidebar</b> any time with the button at its top, or
+    <kbd>Alt</kbd>+<kbd>\</kbd>.</li>
+    <li><b>System tray icon</b> <i>(Options)</i>, off by default.</li>
   </ul>
 
   <h2>Keyboard shortcuts</h2>
-  <p class="lede">All of these are <kbd>Alt</kbd>-modified so they cannot shadow
-  Granblue's own keys. They work while the game, the wiki, or this page has
-  focus.</p>
   <table>
     <tr><td>Home</td><td><kbd>Alt</kbd>+<kbd>1</kbd></td></tr>
     <tr><td>Party</td><td><kbd>Alt</kbd>+<kbd>P</kbd></td></tr>
@@ -133,82 +148,56 @@
     <tr><td>Trial Battles</td><td><kbd>Alt</kbd>+<kbd>[</kbd></td></tr>
     <tr><td>Casino</td><td><kbd>Alt</kbd>+<kbd>]</kbd></td></tr>
     <tr><td>Gacha</td><td><kbd>Alt</kbd>+<kbd>;</kbd></td></tr>
-    <tr><td>Collapse / expand the sidebar</td><td><kbd>Alt</kbd>+<kbd>\</kbd></td></tr>
-    <tr><td>Lock / unlock the chat column <i>(desktop client)</i></td><td><kbd>Alt</kbd>+<kbd>L</kbd></td></tr>
+    <tr><td>Hide / show the sidebar</td><td><kbd>Alt</kbd>+<kbd>\</kbd></td></tr>
     <tr><td>Open / close the wiki</td><td><kbd>Alt</kbd>+<kbd>W</kbd></td></tr>
-    <tr><td>Reload this page</td><td><kbd>Alt</kbd>+<kbd>R</kbd></td></tr>
     <tr><td>Back</td><td><kbd>Alt</kbd>+<kbd>Left</kbd></td></tr>
+    <tr><td>Reload</td><td><kbd>Alt</kbd>+<kbd>R</kbd></td></tr>
+    <tr><td>Lock / unlock the chat column <i>(PC version)</i></td><td><kbd>Alt</kbd>+<kbd>L</kbd></td></tr>
   </table>
 
-  <h2>Watching two things at once</h2>
-  <p class="lede">Two ways, and they cost very different amounts.</p>
+  <h2>Good to know</h2>
   <ul>
-    <li><b>Second view</b> <i>(in the sidebar, under Reference)</i><b>.</b>
-    Another Granblue in this same window, beside the first. It shares the panel
-    slot with the wiki, so opening one closes the other, and it has its own
-    <b>Back</b> and <b>Reload</b> in the bar at the top of the sidebar. Options
-    sets whether it opens at <b>Large</b> or <b>Small</b>, independently of the
-    game's own size. It adds one webview.</li>
-    <li><b>Multiple windows</b> <i>(Options)</i><b>.</b> A whole extra window,
-    off by default, then either capped at one extra or uncapped. Each window
-    runs its own game, sidebar and panels, so it costs roughly four times what
-    a second view does. Both windows share one login.</li>
+    <li><b>Drag to scroll.</b> Click and drag to scroll the game or the
+    sidebar.</li>
+    <li><b>Phone or PC version.</b> Options lets you switch to Granblue's PC
+    version instead. The app restarts when you switch.</li>
+    <li><b>Something wrong?</b> The bottom of Options shows which build you
+    have. Include it when reporting a problem.</li>
+    <li><b>Your game is safe.</b> This app never changes Granblue, its
+    settings, or your account.</li>
   </ul>
 
-  <h2>Things you may not have noticed</h2>
-  <ul>
-    <li><b>Drag to scroll.</b> Click and drag anywhere that already scrolls —
-    the game's own pages as well as this sidebar — and it scrolls with the
-    drag, with momentum. A drag never activates the control underneath it.</li>
-    <li><b>Locked mode</b> <i>(desktop client)</i><b>.</b> Opening a panel
-    hides Granblue's chat column (<kbd>Alt</kbd>+<kbd>L</kbd> does the same by
-    hand) so the panel uses that space instead of squeezing the game. The
-    mobile client has no chat column, so there is nothing to hide.</li>
-    <li><b>The wiki keeps its place.</b> Close and reopen it and you are on the
-    same page, at the same scroll, because its webview is hidden rather than
-    destroyed. Opening this page or Options cannot wipe it — the wiki has a
-    webview to itself, and About and Options share a second one between
-    them.</li>
-    <li><b>The sidebar follows the game.</b> Shortcut rows light up to show
-    where you are in Granblue. The sidebar reads the game's address; it never
-    writes to it.</li>
-    <li><b>Back and Reload</b> sit at the bottom of the sidebar and drive
-    Granblue, not this page. They show on both clients and can be turned off in
-    Options. <kbd>Alt</kbd>+<kbd>Left</kbd> and <kbd>Alt</kbd>+<kbd>R</kbd>
-    keep working either way, from whichever webview has focus.</li>
-    <li><b>Panels can sit on either side of the sidebar.</b> Options has the
-    choice: right of the sidebar (the default, so the rail stays against the
-    game) or between the game and the sidebar.</li>
-    <li><b>Which build this is.</b> The bottom of Options names the version
-    and when it was built. Worth quoting if something looks wrong, since two
-    builds can carry the same version number.</li>
-    <li><b>Three themes.</b> Midnight, Ember and Tide, in Options. They tint
-    this app's own chrome only — the sidebar, Options and this page. Granblue
-    is never themed.</li>
-  </ul>
+  <h2>Made by</h2>
+  <p><b>Koine</b> (AIxIOU on GitHub), a Granblue Fantasy player who wanted a
+  better way to play on PC.</p>
+  <p class="lede">Project page: github.com/AIxIOU/Granblue-Fantasy-Pake</p>
+  <p class="lede">Built on <b>Pake</b> by tw93, an open-source tool for turning
+  websites into desktop apps. Granblue Fantasy is made by Cygames; this is a
+  fan-made app and is not affiliated with or endorsed by Cygames.</p>
 
-  <h2>Limitations, and why</h2>
-  <ul>
-    <li><b>On the desktop client with Automatic Resizing, the sidebar and
-    panels are hidden</b> so Granblue has the whole window, and nothing of
-    this app runs in the page. That mode re-fits and reloads on every width
-    change, so anything placed beside it would fight you. The mobile client
-    never re-fits, which is why it is the default.</li>
-    <li><b>macOS and Linux are untested</b> in this experiment. The shipping
-    client is also unverified there.</li>
+  <h2>Technical details</h2>
+  <ul class="tech">
+    <li><b>Architecture:</b> Tauri v2 on WebView2. Game, sidebar, wiki and a
+    shared About/Options panel are separate webviews in one window on one
+    shared browser environment; nothing is injected into Granblue's
+    document.</li>
+    <li><b>Client:</b> mobile sends a phone User-Agent with the page request
+    only — a version Cygames already serves. Fixed width, no re-fit on resize.
+    The PC client offers Granblue's own Window Size settings and Layout /
+    Lock; with Automatic Resizing on, the sidebar and panels are hidden.</li>
+    <li><b>Performance:</b> one shared WebView2 environment for every
+    webview, not one per view. Battle animation is paced at
+    30&nbsp;fps by Granblue on both clients.</li>
+    <li><b>Panels:</b> placed right of the sidebar or between game and sidebar
+    (Options). The wiki is hidden, not destroyed. Second view shares the panel
+    slot with the wiki and opens Large or Small (Options). Extra windows: Off,
+    one extra, or unlimited; each costs about four second views.</li>
+    <li><b>Locked mode</b> (PC client) hides the chat column with CSS
+    <code>display</code> only.</li>
+    <li><b>Build stamp:</b> version, build number (commit count), commit hash
+    and build time. Bottom debugger in Options shows diagnostics.</li>
+    <li><b>Platforms:</b> Windows tested; macOS and Linux untested.</li>
   </ul>
-
-  <h2>Granblue is never modified</h2>
-  <p>The game runs in the form Cygames served it. This app reads the game's
-  layout where it must, and in locked mode hides the chat column with CSS
-  <code>display</code> alone. It never changes Granblue's settings, its code,
-  or what it sends and receives.</p>
-  <p>The one thing it does ask for is <b>which client to be served</b>: the
-  mobile option sends a phone User-Agent with the page request, exactly as a
-  phone browser would. That is a request for a version Cygames already
-  publishes, made before the page exists. Once the page arrives it is left
-  alone — no scripts rewritten, no traffic altered, nothing injected to
-  "make it mobile."</p>
 </div>
 <script>
   function applyTheme(t) {
