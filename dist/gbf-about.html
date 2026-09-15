@@ -113,6 +113,7 @@
     font-size: 11px; word-break: break-all;
   }
   #about-build .warn { color: var(--gold); }
+  a[data-link] { color: var(--accent); text-decoration: underline; cursor: pointer; }
 </style>
 <div id="gbf-about-body">
   <h1>Granblue Fantasy nPake <span class="badge">NATIVE</span></h1>
@@ -198,7 +199,8 @@
   <h2>Made by</h2>
   <p><b>Koine</b> (AIxIOU on GitHub), a Granblue Fantasy player who wanted a
   better way to play on PC.</p>
-  <p class="lede">Project page: github.com/AIxIOU/Granblue-Fantasy-Pake</p>
+  <p class="lede">Project page: <a href="#" data-link="github">github.com/AIxIOU/Granblue-Fantasy-Pake</a></p>
+  <p class="lede">Discord: <a href="#" data-link="discord">discord.gg/grGv4Th5cE</a></p>
   <p class="lede">Built on <b>Pake</b> by tw93, an open-source tool for turning
   websites into desktop apps. Granblue Fantasy is made by Cygames; this is a
   fan-made app and is not affiliated with or endorsed by Cygames.</p>
@@ -237,6 +239,17 @@
         row(dl, "Unavailable", String(e && e.message ? e.message : e), "warn");
       });
   }
+  // Links open outside the app (default browser, which hands discord.gg to
+  // the Discord app). Rust accepts only its own fixed list of names.
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("a[data-link]");
+    if (!a) return;
+    e.preventDefault();
+    if (t && t.core && t.core.invoke) {
+      t.core.invoke("gbf_open_link", { which: a.getAttribute("data-link") })
+        .catch(function () {});
+    }
+  });
   function row(dl, k, v, cls) {
     var dt = document.createElement("dt");
     dt.textContent = k;

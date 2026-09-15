@@ -3503,6 +3503,28 @@ pub fn gbf_panel_state(window: Window) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Open one of the About page's links outside the app.
+///
+/// A plain `<a href>` would navigate the About panel itself to GitHub or
+/// Discord, stranding the user in a narrow panel. This hands the address to
+/// Windows instead, so it opens in the default browser -- and a discord.gg
+/// invite there offers to continue in the Discord app if it is installed.
+///
+/// Only the fixed addresses below are accepted, keyed by name, so no page can
+/// use this to open arbitrary URLs or programs.
+#[tauri::command]
+pub fn gbf_open_link(app: AppHandle, which: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = match which.as_str() {
+        "discord" => "https://discord.gg/grGv4Th5cE",
+        "github" => "https://github.com/AIxIOU/Granblue-Fantasy-Pake",
+        _ => return Err(format!("unknown link: {which}")),
+    };
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Which build is this, exactly.
 ///
 /// The maintainer could not tell one build from another, and the version alone
