@@ -1,6 +1,6 @@
 {
   "bundle": {
-    "icon": ["icons/weekly.icns"],
+    "icon": ["icons/gbf_npake.icns"],
     "active": true,
     "targets": ["dmg"],
     "macOS": {

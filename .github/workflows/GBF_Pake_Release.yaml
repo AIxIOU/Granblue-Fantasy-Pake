@@ -1,17 +1,18 @@
-# Public release builds: six installers, one per platform per region.
+# Public release builds of Granblue Fantasy nPake: six installers, one per
+# platform per region.
 #
-# Triggered by pushing a version tag (v1.2.3), or dispatched manually with a
-# version for a dry run. Exercise dispatches on the PRIVATE dev repo first --
-# see GBF_Pake_RULES_AND_HANDOFF.md.
+# nPake is built FROM THIS REPOSITORY'S SOURCE with the Tauri CLI. It is not
+# the v1 model (Pake CLI + an injected gbf-scaler.js); that line is archived on
+# branch archive/overlay-v1.
+#
+# Triggered by pushing a version tag (v2.0.0-1), or dispatched manually for a
+# dry run. Dry-run on the PRIVATE dev repo first -- see
+# GBF_Pake_RULES_AND_HANDOFF.md.
 #
 # Why six: Steam and Japanese Granblue are different sites, built as separate
 # apps with separate identifiers so a player can install both and run them at
 # the same time.
 name: Public Release
-
-env:
-  NODE_VERSION: "22"
-  PNPM_VERSION: "10.26.2"
 
 on:
   push:
@@ -20,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version: MAJOR.MINOR.PATCH with optional numeric pre-release, e.g. 1.0.0-1"
+        description: "Version: MAJOR.MINOR.PATCH with optional numeric pre-release, e.g. 2.0.0-1"
         required: true
         default: "0.0.0-1"
       publish:
@@ -33,142 +34,132 @@ on:
         required: false
         type: boolean
         default: false
+      only:
+        description: "Build only one job for a quick check (blank = all six), e.g. windows-steam"
+        required: false
+        default: ""
 
 jobs:
   build:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, region: steam, label: "Windows - Steam" }
-          - { os: windows-latest, region: jp, label: "Windows - Japan" }
-          - { os: macos-latest, region: steam, label: "macOS - Steam" }
-          - { os: macos-latest, region: jp, label: "macOS - Japan" }
-          - { os: ubuntu-24.04, region: steam, label: "Linux - Steam" }
-          - { os: ubuntu-24.04, region: jp, label: "Linux - Japan" }
+          - { os: windows-latest, region: steam, key: windows-steam, label: "Windows - Steam" }
+          - { os: windows-latest, region: jp, key: windows-jp, label: "Windows - Japan" }
+          - { os: macos-latest, region: steam, key: macos-steam, label: "macOS - Steam" }
+          - { os: macos-latest, region: jp, key: macos-jp, label: "macOS - Japan" }
+          - { os: ubuntu-24.04, region: steam, key: linux-steam, label: "Linux - Steam" }
+          - { os: ubuntu-24.04, region: jp, key: linux-jp, label: "Linux - Japan" }
 
     steps:
+      - name: Skip jobs not selected
+        id: gate
+        shell: bash
+        run: |
+          ONLY="${{ inputs.only }}"
+          if [ -n "$ONLY" ] && [ "$ONLY" != "${{ matrix.key }}" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Full history: build.rs stamps the build number from `git rev-list
+      # --count HEAD`. A shallow checkout would make every release "Build 1".
       - name: Checkout repository
+        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Resolve version and region
+        if: steps.gate.outputs.run == 'true'
         id: cfg
         shell: bash
         run: |
-          # A tag is the source of truth for released versions; the dispatch
-          # input exists so this can be exercised without tagging.
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             RAW="${GITHUB_REF_NAME#v}"
           else
             RAW="${{ inputs.version }}"
           fi
 
-          # ONE VERSION STRING, VALID ON EVERY PLATFORM. No translation.
-          #
-          # Semver with an optional NUMERIC pre-release identifier:
-          #   1.0.0-1   beta 1        1.0.0-2   beta 2        1.0.0   final
-          #
-          # Numeric is not a stylistic choice. Measured on a dry run with
-          # 0.0.0-test: macOS and Linux built, both Windows jobs failed with
-          #   "optional pre-release identifier in app version must be
-          #    numeric-only and cannot be greater than 65535 for msi target"
-          # So this is the only pre-release form the MSI packager accepts, and
-          # using it directly means the tag, the compiled version, the release
-          # title and the filenames are all the same string.
+          # ONE VERSION STRING, VALID ON EVERY PLATFORM. Numeric pre-release
+          # only: the Windows MSI packager rejects labels like -beta.1.
           if ! printf '%s' "$RAW" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]{1,5})?$'; then
-            echo "::error::Version '$RAW' is not usable. Use MAJOR.MINOR.PATCH with an optional numeric pre-release: 1.0.0-1 (beta 1), 1.0.0-2, then 1.0.0. Labels like -beta.1 fail the Windows MSI packager."
+            echo "::error::Version '$RAW' is not usable. Use MAJOR.MINOR.PATCH with an optional numeric pre-release: 2.0.0-1 (beta 1), 2.0.0-2, then 2.0.0."
             exit 1
           fi
-          VERSION="$RAW"
-          echo "version -> $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "label=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
 
-          # Distinct names -> distinct bundle identifiers -> both regions can
-          # be installed side by side and run at the same time.
           if [ "${{ matrix.region }}" = "jp" ]; then
             echo "url=https://game.granbluefantasy.jp" >> "$GITHUB_OUTPUT"
-            echo "appname=Granblue Fantasy Pake JP" >> "$GITHUB_OUTPUT"
+            echo "appname=Granblue Fantasy nPake JP" >> "$GITHUB_OUTPUT"
+            echo "identifier=com.gbf.npake.jp" >> "$GITHUB_OUTPUT"
           else
             echo "url=https://steam.granbluefantasy.com" >> "$GITHUB_OUTPUT"
-            echo "appname=Granblue Fantasy Pake" >> "$GITHUB_OUTPUT"
+            echo "appname=Granblue Fantasy nPake" >> "$GITHUB_OUTPUT"
+            echo "identifier=com.gbf.npake" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: Setup Node.js Environment
+      - name: Setup build environment
+        if: steps.gate.outputs.run == 'true'
         uses: ./.github/actions/setup-env
         with:
           mode: build
 
-      - name: Build CLI
-        run: pnpm run cli:build
-
-      - name: Setup mold linker
-        if: runner.os == 'Linux'
-        uses: rui314/setup-mold@v1
+      # Region and version are the only things that differ between the six
+      # builds. They are written into the app's own config files here, so the
+      # compiled app and the installer agree.
+      - name: Configure app for this region and version
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.cfg.outputs.version }}
+          APP_NAME: ${{ steps.cfg.outputs.appname }}
+          APP_ID: ${{ steps.cfg.outputs.identifier }}
+          APP_URL: ${{ steps.cfg.outputs.url }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const conf = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(conf, "utf8"));
+            c.productName = process.env.APP_NAME;
+            c.identifier = process.env.APP_ID;
+            c.version = process.env.APP_VERSION;
+            fs.writeFileSync(conf, JSON.stringify(c, null, 2));
+            const pj = "src-tauri/pake.json";
+            const p = JSON.parse(fs.readFileSync(pj, "utf8"));
+            p.windows[0].url = process.env.APP_URL;
+            fs.writeFileSync(pj, JSON.stringify(p, null, 2));
+            console.log(c.productName, c.identifier, c.version, p.windows[0].url);
+          '
 
       - name: Build app
+        if: steps.gate.outputs.run == 'true'
         shell: bash
-        timeout-minutes: 35
+        timeout-minutes: 50
         run: |
-          SCRIPT="$GITHUB_WORKSPACE/.github/scripts/gbf-scaler.js"
-          if [ ! -f "$SCRIPT" ]; then
-            echo "::error::Missing $SCRIPT"
-            exit 1
-          fi
-
-          # --multi-window, NOT --multi-instance. Granblue players want a
-          # second window for parties or inventory while a raid is live, and
-          # these two flags are mutually exclusive in Pake:
-          #
-          #   if !multi_instance {                    // single-instance plugin
-          #       if multi_window { open_additional_window_safe(app) }
-          #   }
-          #
-          # So the additional-window path only exists while multi_instance is
-          # FALSE. Shipping --multi-instance in 1.0.0-1 gave separate processes
-          # whose windows stacked at the same saved position, which looked like
-          # nothing happened. One app, several windows is what was wanted.
-          ARGS=(
-            "${{ steps.cfg.outputs.url }}"
-            "--name" "${{ steps.cfg.outputs.appname }}"
-            "--inject" "$SCRIPT"
-            "--icon" "./icon/gbf-europa-icon.png"
-            "--multi-window"
-            "--app-version" "${{ steps.cfg.outputs.version }}"
-            "--width" "900" "--height" "820"
-            "--min-width" "700" "--min-height" "570"
-          )
-
-          # One .dmg that runs on both Apple Silicon and Intel, rather than
-          # shipping two more artifacts.
+          # One .dmg that runs on both Apple Silicon and Intel.
           if [ "$RUNNER_OS" = "macOS" ]; then
-            ARGS+=("--multi-arch")
+            pnpm tauri build --target universal-apple-darwin
+          else
+            pnpm tauri build
           fi
-
-          echo "Running: node dist/cli.js ${ARGS[*]}"
-          node dist/cli.js "${ARGS[@]}"
 
       - name: Collect installers
+        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
           mkdir -p dist-release
-          # Bundle names vary by platform and version, so collect by extension
-          # rather than guessing the filename.
-          find . -type f \( -name "*.msi" -o -name "*.dmg" -o -name "*.deb" \
-            -o -name "*.AppImage" -o -name "*.rpm" \) \
-            -not -path "./dist-release/*" -print0 |
+          find src-tauri/target -type f -path "*/bundle/*" \( -name "*.msi" -o -name "*.dmg" \
+            -o -name "*.deb" -o -name "*.AppImage" \) -print0 |
             while IFS= read -r -d '' f; do
               base="$(basename "$f")"
               ext="${base##*.}"
-              cp "$f" "dist-release/GranblueFantasyPake-${{ matrix.region }}-${{ steps.cfg.outputs.label }}-$RUNNER_OS.$ext"
+              cp "$f" "dist-release/GranblueFantasyNPake-${{ matrix.region }}-${{ steps.cfg.outputs.version }}-$RUNNER_OS.$ext"
             done
           ls -la dist-release/
           if [ -z "$(ls -A dist-release)" ]; then
@@ -177,9 +168,10 @@ jobs:
           fi
 
       - name: Upload installers
+        if: steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v6
         with:
-          name: gbf-pake-${{ matrix.region }}-${{ runner.os }}
+          name: gbf-npake-${{ matrix.region }}-${{ runner.os }}
           path: dist-release/*
           retention-days: 14
           if-no-files-found: error
@@ -214,30 +206,32 @@ jobs:
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-          # ANY pre-release label marks the release as a pre-release.
-          #
-          # Derived from the version rather than taken from the dispatch input,
-          # because inputs are EMPTY on a tag push -- so a v1.0.0-beta.1 tag
-          # would otherwise have published as a full release, which is the
-          # opposite of what the tag says. The manual input can still force it
-          # on for a build that has no label.
+          # Derived from the version: inputs are EMPTY on a tag push, so a
+          # labelled tag would otherwise publish as a full release.
           case "$V" in
             *-*) PRE=true ;;
             *)   PRE=${{ inputs.prerelease || false }} ;;
           esac
-          echo "Release $TAG -> prerelease=$PRE"
           echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.v.outputs.tag }}
-          name: Granblue Fantasy Pake ${{ steps.v.outputs.version }}
+          name: Granblue Fantasy nPake ${{ steps.v.outputs.version }}
           prerelease: ${{ steps.v.outputs.prerelease }}
           fail_on_unmatched_files: true
           files: artifacts/*
           body: |
+            ## Beta
+
+            nPake is a rebuilt version of this app and replaces the 1.x
+            releases. It has been played and tested on **Windows with Steam
+            Granblue**. macOS, Linux and the Japanese site are **untested** —
+            please report what you find.
+
+            Settings and logins from 1.x do not carry over; log in once.
+
             ## Which file do I download?
 
             | Your system | Steam Granblue | Japanese Granblue |
@@ -249,47 +243,37 @@ jobs:
             The Steam and Japanese builds are separate apps. You can install
             both and run them at the same time.
 
-            ## Multiple windows at once
+            ## What's new in nPake
 
-            Open the app again and you get a **second window in the same app**,
-            so you can manage parties or inventory while a raid is running.
-            Close a window and the rest keep going.
+            - Uses Granblue's lighter phone version by default, and never
+              reloads when you resize the window.
+            - Sidebar shortcuts, a built-in wiki, and a **second Granblue view**
+              in the same window.
+            - Options for extra windows, colour themes, system tray and more.
+            - **Not a mod.** Granblue Fantasy is never changed; the app is a
+              small standalone web viewer with its own features beside the game.
 
             ## First launch
 
             These builds are **not code-signed**, so your system will warn you.
             Nothing is wrong; signing certificates cost money and this is a
-            free, open-source wrapper.
+            free, open-source app.
 
-            **macOS** - you will see *"Granblue Fantasy Pake is damaged and
+            **macOS** - you will see *"Granblue Fantasy nPake is damaged and
             can't be opened."* It is not damaged; macOS adds a quarantine flag
             to unsigned downloads. After dragging the app to Applications, run
             this once in Terminal:
 
             ```
-            xattr -cr "/Applications/Granblue Fantasy Pake.app"
+            xattr -cr "/Applications/Granblue Fantasy nPake.app"
             ```
 
-            (For the Japanese build, use `Granblue Fantasy Pake JP.app`.)
+            (For the Japanese build, use `Granblue Fantasy nPake JP.app`.)
 
             **Windows** - SmartScreen shows a blue warning. Click **More info**
             then **Run anyway**.
 
-            **Linux** - installs normally:
+            **Linux** - `sudo dpkg -i GranblueFantasyNPake-*.deb`, or `chmod +x`
+            the `.AppImage` and run it.
 
-            ```
-            sudo dpkg -i GranblueFantasyPake-*.deb
-            ```
-
-            Or use the `.AppImage`: `chmod +x` it and run it.
-
-            ## What this is
-
-            A desktop wrapper for Granblue Fantasy with a navigation sidebar,
-            a built-in wiki panel and an About page. **The game itself is never
-            modified** - it runs exactly as it does in a browser. The app reads
-            the game's layout to position the sidebar and nothing more.
-
-            Press **Alt+W** for the wiki, **Alt+L** to lock or unlock the
-            sidebar, and see the in-app **About** page for the full shortcut
-            list.
+            Community: https://discord.gg/grGv4Th5cE
