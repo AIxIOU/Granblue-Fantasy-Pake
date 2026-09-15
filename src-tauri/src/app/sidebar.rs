@@ -1189,8 +1189,14 @@ fn css_to_window_logical(host: &Window, css: f64, dpr: f64) -> f64 {
 /// CSS pixels of the edge the sidebar should sit on.
 /// Locked: `#wrapper`. Unlocked: the submenu overlay (collapsed rail or
 /// expanded chat panel).
+///
+/// Mobile client: always `#wrapper`. It has no chat column and no submenu
+/// overlay (overlay reads 0), and Layout / Lock is desktop-only, so `locked`
+/// is just whatever was last saved. Reading the overlay there meant a fresh
+/// install (locked=false) never snapped the window to the sidebar at all,
+/// found 2026-09-15 when the new identifier started from default settings.
 fn snap_css(state: &SidebarState, label: &str) -> f64 {
-    if state.is_locked(label) {
+    if state.is_locked(label) || state.is_mobile(label) {
         state.game_edge(label)
     } else {
         state.game_overlay(label)
