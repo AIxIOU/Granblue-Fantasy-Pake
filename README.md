@@ -54,6 +54,28 @@ shortcuts — is part of the app and sits **beside** the game, never inside it.
 
 The in-app **About** page lists every shortcut.
 
+## Screenshots
+
+**The sidebar beside the game.** Shortcuts on the right; the one you're on
+lights up. Back and Reload sit at the bottom.
+
+![The sidebar beside the game](./README/01-sidebar.webp)
+
+**The built-in wiki**, opened beside the game without leaving it.
+
+![The wiki open beside the game](./README/02-wiki.webp)
+
+**Second view** — another Granblue in the same window, with its own Back and
+Reload at the top of the sidebar.
+
+![A second Granblue view beside the first](./README/03-second-view.webp)
+
+**Options** and the **About** page.
+
+![Options](./README/04-options.webp)
+
+![About](./README/05-about.webp)
+
 ## Download
 
 Get the newest release from the [**Releases**](../../releases) page.
