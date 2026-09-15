@@ -91,12 +91,42 @@
   }
   .tech { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
   .tech li { margin: 3px 0; }
+  .note {
+    border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 4px; padding: 8px 12px; margin: 10px 0 4px;
+  }
+  .note p { margin: 0; }
+  /* Build identity. Selectable on purpose: the point is to be able to quote
+     it back when reporting something. */
+  #about-build {
+    color: var(--muted); font-size: 12px;
+    user-select: text; -webkit-user-select: text; cursor: text;
+  }
+  #about-build dl {
+    margin: 0; display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 3px 12px;
+  }
+  #about-build dd {
+    margin: 0; color: var(--fg);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px; word-break: break-all;
+  }
+  #about-build .warn { color: var(--gold); }
 </style>
 <div id="gbf-about-body">
   <h1>Granblue Fantasy nPake <span class="badge">NATIVE</span></h1>
-  <p class="lede">Granblue Fantasy in its own window, with a handy sidebar and
-  a built-in wiki. Smoother, lighter and more convenient than playing in a web
-  browser. The game itself is never changed.</p>
+  <p class="lede">Granblue Fantasy in its own lightweight window, with a handy
+  sidebar and a built-in wiki. Smoother, lighter and more convenient than
+  playing in a web browser.</p>
+
+  <div class="note">
+    <p><b>This is not a mod.</b> It does not change Granblue Fantasy in any
+    way. It is a small, standalone web viewer that shows the game exactly as
+    Cygames serves it, the same as a browser would. Every extra feature — the
+    sidebar, the wiki, the shortcuts — is part of this app and sits beside the
+    game, never inside it.</p>
+  </div>
 
   <h2>Better than a browser tab</h2>
   <ul>
@@ -161,10 +191,8 @@
     sidebar.</li>
     <li><b>Phone or PC version.</b> Options lets you switch to Granblue's PC
     version instead. The app restarts when you switch.</li>
-    <li><b>Something wrong?</b> The bottom of Options shows which build you
-    have. Include it when reporting a problem.</li>
-    <li><b>Your game is safe.</b> This app never changes Granblue, its
-    settings, or your account.</li>
+    <li><b>Your game and account are safe.</b> Nothing about Granblue, its
+    settings or your account is ever changed.</li>
   </ul>
 
   <h2>Made by</h2>
@@ -177,27 +205,19 @@
 
   <h2>Technical details</h2>
   <ul class="tech">
-    <li><b>Architecture:</b> Tauri v2 on WebView2. Game, sidebar, wiki and a
-    shared About/Options panel are separate webviews in one window on one
-    shared browser environment; nothing is injected into Granblue's
-    document.</li>
-    <li><b>Client:</b> mobile sends a phone User-Agent with the page request
-    only — a version Cygames already serves. Fixed width, no re-fit on resize.
-    The PC client offers Granblue's own Window Size settings and Layout /
-    Lock; with Automatic Resizing on, the sidebar and panels are hidden.</li>
-    <li><b>Performance:</b> one shared WebView2 environment for every
-    webview, not one per view. Battle animation is paced at
-    30&nbsp;fps by Granblue on both clients.</li>
-    <li><b>Panels:</b> placed right of the sidebar or between game and sidebar
-    (Options). The wiki is hidden, not destroyed. Second view shares the panel
-    slot with the wiki and opens Large or Small (Options). Extra windows: Off,
-    one extra, or unlimited; each costs about four second views.</li>
-    <li><b>Locked mode</b> (PC client) hides the chat column with CSS
-    <code>display</code> only.</li>
-    <li><b>Build stamp:</b> version, build number (commit count), commit hash
-    and build time. Bottom debugger in Options shows diagnostics.</li>
-    <li><b>Platforms:</b> Windows tested; macOS and Linux untested.</li>
+    <li>Built with Tauri on Microsoft WebView2, the same engine as Edge.</li>
+    <li>The game, sidebar and panels are separate views in one window, sharing
+    one engine. Nothing is added to Granblue's page.</li>
+    <li>The phone version is requested the way a phone browser asks for it;
+    the page itself is left untouched.</li>
+    <li>Tested on Windows.</li>
   </ul>
+
+  <h2>Version</h2>
+  <div id="about-build">
+    <p class="lede">Include these lines when reporting a problem.</p>
+    <dl id="about-build-list"><dt>Loading</dt><dd>&hellip;</dd></dl>
+  </div>
 </div>
 <script>
   function applyTheme(t) {
@@ -209,5 +229,40 @@
     t.core.invoke("gbf_panel_state")
       .then(function (st) { applyTheme(st && st.theme); })
       .catch(function () {});
+    t.core.invoke("gbf_version")
+      .then(paintBuild)
+      .catch(function (e) {
+        var dl = document.getElementById("about-build-list");
+        dl.textContent = "";
+        row(dl, "Unavailable", String(e && e.message ? e.message : e), "warn");
+      });
+  }
+  function row(dl, k, v, cls) {
+    var dt = document.createElement("dt");
+    dt.textContent = k;
+    var dd = document.createElement("dd");
+    dd.textContent = v;
+    if (cls) dd.className = cls;
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+  // Moved here from Options. Build number says which build in order, the
+  // commit says exactly which source; "+dirty" means uncommitted edits.
+  function paintBuild(v) {
+    var dl = document.getElementById("about-build-list");
+    dl.textContent = "";
+    row(dl, "Version", (v.name || "?") + " " + (v.version || "?"));
+    var build = (v.buildNumber || "?") + " · " + (v.commit || "unknown");
+    row(dl, "Build", build, String(v.commit || "").indexOf("+dirty") !== -1 ? "warn" : null);
+    var when = "unknown";
+    if (v.builtEpoch) {
+      var d = new Date(v.builtEpoch * 1000);
+      when = d.getFullYear() + "-" +
+        String(d.getMonth() + 1).padStart(2, "0") + "-" +
+        String(d.getDate()).padStart(2, "0") + " " +
+        String(d.getHours()).padStart(2, "0") + ":" +
+        String(d.getMinutes()).padStart(2, "0");
+    }
+    row(dl, "Built", when);
   }
 </script>

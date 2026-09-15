@@ -101,26 +101,6 @@
     border-color: var(--accent); outline: none;
   }
   #opt-theme option { background: var(--bg); color: var(--fg); }
-  /* Build identity. Selectable on purpose: the point is to be able to quote
-     it back when reporting something. */
-  #opt-build {
-    margin-top: 22px; padding-top: 14px;
-    border-top: 1px solid var(--line);
-    color: var(--fg-dim); font-size: 12px;
-    user-select: text; -webkit-user-select: text; cursor: text;
-  }
-  #opt-build dl {
-    margin: 0; display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 3px 12px;
-  }
-  #opt-build dt { color: var(--fg-dim); }
-  #opt-build dd {
-    margin: 0; color: var(--fg);
-    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-    font-size: 11px; word-break: break-all;
-  }
-  #opt-build .warn { color: var(--gold); }
 </style>
 <div id="gbf-options-body">
   <h1>Options <span class="badge">NATIVE</span></h1>
@@ -216,12 +196,6 @@
     expand the dump. Off by default.</span>
   </button>
 
-  <h2>This build</h2>
-  <div id="opt-build">
-    <dl id="opt-build-list">
-      <dt>Loading</dt><dd>&hellip;</dd>
-    </dl>
-  </div>
 </div>
 <script>
   function invoke(cmd, args) {
@@ -336,46 +310,4 @@
     .then(function (st) { window.__gbfOptions.setState(st); })
     .catch(function () {});
 
-  // Build identity. Static for the life of the process, so it is asked for
-  // once and never pushed.
-  function row(dl, k, v, cls) {
-    var dt = document.createElement("dt");
-    dt.textContent = k;
-    var dd = document.createElement("dd");
-    dd.textContent = v;
-    if (cls) dd.className = cls;
-    dl.appendChild(dt);
-    dl.appendChild(dd);
-  }
-  // Version and build time only. Those two identify a binary on their own,
-  // and the maintainer trimmed the rest as clutter. `gbf_version` still
-  // returns commit, profile, identifier and the Tauri/WebView2 versions, so a
-  // diagnostic can ask for them without this panel carrying them.
-  function paintBuild(v) {
-    var dl = document.getElementById("opt-build-list");
-    dl.textContent = "";
-    row(dl, "Version", (v.name || "?") + " " + (v.version || "?"));
-    // Build number and commit together: the number says WHICH build in order,
-    // the commit says exactly which source. Two builds of the same commit
-    // differ only by the time below.
-    var build = (v.buildNumber || "?") + " · " + (v.commit || "unknown");
-    row(dl, "Build", build, String(v.commit || "").indexOf("+dirty") !== -1 ? "warn" : null);
-    var when = "unknown";
-    if (v.builtEpoch) {
-      var d = new Date(v.builtEpoch * 1000);
-      when = d.getFullYear() + "-" +
-        String(d.getMonth() + 1).padStart(2, "0") + "-" +
-        String(d.getDate()).padStart(2, "0") + " " +
-        String(d.getHours()).padStart(2, "0") + ":" +
-        String(d.getMinutes()).padStart(2, "0");
-    }
-    row(dl, "Built", when);
-  }
-  invoke("gbf_version")
-    .then(paintBuild)
-    .catch(function (e) {
-      var dl = document.getElementById("opt-build-list");
-      dl.textContent = "";
-      row(dl, "Unavailable", String(e && e.message ? e.message : e), "warn");
-    });
 </script>
