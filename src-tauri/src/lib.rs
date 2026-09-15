@@ -32,7 +32,8 @@ use app::{
     },
     setup::{set_global_shortcut, set_system_tray, TrayRuntime},
     window::{
-        reapply_window_icon, reveal_built_window, set_window, MultiWindowState,
+        open_additional_window_safe, reapply_window_icon, reveal_built_window, save_last_url,
+        set_window, MultiWindowState,
     },
 };
 use util::get_pake_config;
@@ -199,6 +200,8 @@ pub fn run_app() {
     let tauri_app = tauri::Builder::default();
 
     let hide_on_close = pake_config.windows[0].hide_on_close;
+    let remember_url =
+        pake_config.windows[0].url_type == "web" && !pake_config.windows[0].incognito;
     let activation_shortcut = pake_config.windows[0].activation_shortcut.clone();
     let init_fullscreen = pake_config.windows[0].fullscreen;
     let want_start_to_tray = pake_config.windows[0].start_to_tray;
@@ -455,6 +458,9 @@ pub fn run_app() {
         })
         .on_window_event(move |_window, _event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
+                if remember_url && _window.label() == "pake" {
+                    save_last_url(_window.app_handle());
+                }
                 if hide_on_close
                     && _window.label() == "pake"
                     && _window
@@ -504,6 +510,9 @@ pub fn run_app() {
         })
         .run(move |_app, _event| {
             if let tauri::RunEvent::Exit = _event {
+                if remember_url {
+                    save_last_url(_app);
+                }
                 app::window::persist_window_geometry(_app);
                 app::sidebar::persist_layout_state(_app);
             }

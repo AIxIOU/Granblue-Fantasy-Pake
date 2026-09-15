@@ -7,8 +7,13 @@ import handleInputOptions from './options/index';
 import { getCliProgram } from './helpers/cli-program';
 import { loadConfigFile } from './helpers/config-file';
 import { restoreLocalTree } from './helpers/merge';
+import {
+  beginBuildCancellation,
+  enterBuildWorkspace,
+  throwIfBuildCancelled,
+} from './utils/build-workspace';
 import { isPakeError, PakeError } from './utils/error';
-import { validateUrlInput } from './utils/validate';
+import { validateUrlInput, validateDownloadDirInput } from './utils/validate';
 import {
   ERROR_EXIT_CODES,
   PakeErrorCode,
@@ -86,6 +91,8 @@ program.action(async (urlArg: string, options: PakeCliOptions) => {
   let phase: BuildPhase = 'input';
   let appName: string | null = null;
   let url = urlArg;
+  let leaveWorkspace: (() => Promise<void>) | undefined;
+  let endCancellation: (() => void) | undefined;
 
   try {
     // Heal a dist_bak stranded by an earlier crashed local-input run before
@@ -120,6 +127,8 @@ program.action(async (urlArg: string, options: PakeCliOptions) => {
       }
     }
 
+    validateDownloadDirInput(options.downloadDir);
+
     if (!url) {
       if (jsonMode) {
         throw new PakeError('No URL or local path to package.', {
@@ -139,14 +148,27 @@ program.action(async (urlArg: string, options: PakeCliOptions) => {
       log.setLevel('debug');
     }
 
+    endCancellation = beginBuildCancellation();
+    phase = 'prepare';
+    const workspace = await enterBuildWorkspace();
+    leaveWorkspace = workspace;
+    phase = 'input';
     const appOptions = await handleInputOptions(options, url);
+    throwIfBuildCancelled();
     appName = appOptions.name ?? null;
 
     const builder = BuilderProvider.create(appOptions);
     phase = 'prepare';
     await builder.prepare();
+    throwIfBuildCancelled();
     phase = 'build';
+    await workspace.lockCache();
+    throwIfBuildCancelled();
     await builder.build(url);
+    throwIfBuildCancelled();
+
+    await leaveWorkspace();
+    leaveWorkspace = undefined;
 
     if (jsonMode) {
       printJsonResult({
@@ -164,6 +186,11 @@ program.action(async (urlArg: string, options: PakeCliOptions) => {
     // exitCode 0; a clean commander exit is not a failure.
     if (isCommanderExit(error) && error.exitCode === 0) {
       return;
+    }
+
+    if (leaveWorkspace) {
+      await leaveWorkspace();
+      leaveWorkspace = undefined;
     }
 
     const classified = classifyError(error, phase);
@@ -196,10 +223,12 @@ program.action(async (urlArg: string, options: PakeCliOptions) => {
     // restore run and guarantees the JSON result is flushed on piped stdout.
     process.exitCode = ERROR_EXIT_CODES[classified.code];
   } finally {
-    // A local-input run replaces the package's own dist/ during staging; put
-    // it back so the CLI stays intact and later builds cannot embed this
-    // user's files.
-    restoreLocalTree();
+    // Failed builds discard their private inputs without touching the package.
+    try {
+      if (leaveWorkspace) await leaveWorkspace();
+    } finally {
+      endCancellation?.();
+    }
   }
 });
 

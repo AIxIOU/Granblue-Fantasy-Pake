@@ -25,7 +25,7 @@ Always use `gh` CLI and query live state before acting. Never assume state from 
 
 ## Safety Rules
 
-1. **ALWAYS** draft the reply first and show it to the user for approval before calling any write operation (`gh issue comment`, `gh pr comment`, `gh pr merge`, `gh issue close`, `gh release create`, etc.). Approval of one draft does not extend to future comments.
+1. Prepare and review the exact reply before sending. If the user has explicitly authorized the write action or a batch containing it, complete that scope without another approval checkpoint; otherwise show the draft and ask before writing. Approval of wording alone does not authorize posting, merging, closing, or publishing.
 2. **NEVER** merge, close, or modify without explicit user request.
 3. Before replying to an issue or PR, read the body to confirm the author's language; match their language in the reply. This applies to the author, not to arbitrary thread commenters.
 4. Before replying that a CLI fix is released, verify the exact artifact with `npm view pake-cli@<version> version gitHead dist.tarball --json` and confirm `gitHead` contains the fix. Check `npm view pake-cli version` separately for the `latest` pointer. For app releases, use `gh release view <tag> --json assets`.

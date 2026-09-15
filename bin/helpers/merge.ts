@@ -16,7 +16,11 @@ import {
   TauriPlatform,
   WindowConfig,
 } from '@/types';
-import { tauriConfigDirectory, npmDirectory } from '@/utils/dir';
+import {
+  tauriConfigDirectory,
+  npmDirectory,
+  packageDirectory,
+} from '@/utils/dir';
 import { PakeError } from '@/utils/error';
 import { LINUX_TARGET_TYPES, resolveLinuxBundleTargets } from '@/utils/targets';
 
@@ -123,8 +127,11 @@ async function stageLocalTree(sourceDir: string): Promise<void> {
   const resolvedPackage = await fsExtra
     .realpath(npmDirectory)
     .catch(() => path.resolve(npmDirectory));
+  const installedPackage = await fsExtra.realpath(packageDirectory);
   const packageDist = path.join(resolvedPackage, 'dist');
   if (
+    resolvedSource === installedPackage ||
+    installedPackage.startsWith(resolvedSource + path.sep) ||
     resolvedSource === resolvedPackage ||
     resolvedPackage.startsWith(resolvedSource + path.sep) ||
     resolvedSource === packageDist ||
@@ -475,6 +482,7 @@ async function injectCustomCode(
   }
 
   tauriConf.pake.proxy_url = proxyUrl || '';
+  tauriConf.pake.download_dir = options.downloadDir || '';
   tauriConf.pake.basic_auth = basicAuth;
   tauriConf.pake.multi_instance = multiInstance;
   tauriConf.pake.multi_window = multiWindow;

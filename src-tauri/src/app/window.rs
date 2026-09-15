@@ -22,8 +22,8 @@ pub fn main_browser_args() -> Option<&'static str> {
     MAIN_BROWSER_ARGS.get().map(|s| s.as_str())
 }
 use crate::util::{
-    check_file_or_append, get_data_dir, get_download_message_with_lang, sanitize_download_filename,
-    show_toast, MessageType,
+    check_file_or_append, get_data_dir, get_download_dir, get_download_message_with_lang,
+    sanitize_download_filename, show_toast, MessageType,
 };
 #[cfg(target_os = "macos")]
 use dispatch::Queue;
@@ -210,6 +210,31 @@ struct WindowBuildOptions<'a> {
     url: WebviewUrl,
     visible: bool,
     new_window_features: Option<NewWindowFeatures>,
+}
+
+fn is_blank_popup_url(url: &Url) -> bool {
+    url.scheme() == "about" && url.path() == "blank"
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::is_blank_popup_url;
+    use tauri::Url;
+
+    #[test]
+    fn only_blank_documents_get_the_default_popup_exception() {
+        for input in ["about:blank", "about:blank#download", "about:blank?pending"] {
+            assert!(is_blank_popup_url(&Url::parse(input).unwrap()));
+        }
+        for input in [
+            "https://example.com/",
+            "about:srcdoc",
+            "about:blankness",
+            "file:///tmp/file",
+        ] {
+            assert!(!is_blank_popup_url(&Url::parse(input).unwrap()));
+        }
+    }
 }
 
 fn open_requested_window(
@@ -554,6 +579,27 @@ fn build_window(
         ))
     })?;
 
+    let restored_url = if label == "pake"
+        && window_config.url_type == "web"
+        && !window_config.incognito
+    {
+        match app.path().app_data_dir() {
+            Ok(directory) => match crate::util::read_last_url(&directory.join("last-url.txt")) {
+                Ok(url) => url,
+                Err(error) => {
+                    eprintln!("[Pake] Could not read the last URL: {error}");
+                    None
+                }
+            },
+            Err(error) => {
+                eprintln!("[Pake] Could not locate the last URL: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // On macOS both HTTP Basic auth and certificate bypass use the same
     // navigation-delegate proxy. Start on a neutral page so the proxy is in
     // place before the target can issue its first authentication challenge.
@@ -562,10 +608,14 @@ fn build_window(
         && window_config.url_type == "web"
         && (config.basic_auth || window_config.ignore_certificate_errors)
     {
-        Url::parse(&window_config.url).ok()
+        restored_url
+            .clone()
+            .or_else(|| Url::parse(&window_config.url).ok())
     } else {
         None
     };
+
+    let url = restored_url.map(WebviewUrl::External).unwrap_or(url);
 
     // The delegate must be installed before the first TLS challenge. Start on
     // a neutral page, then navigate from the with_webview callback below.
@@ -688,11 +738,17 @@ fn build_window(
         window_builder = window_builder.disable_drag_drop_handler();
     }
 
-    if window_config.new_window {
+    {
+        let allow_new_window = window_config.new_window;
         let app_handle = app.clone();
         let popup_config = config.clone();
         let popup_tauri_config = tauri_config.clone();
         window_builder = window_builder.on_new_window(move |target_url, features| {
+            // Even without --new-window, two-stage popups need a real webview
+            // with our download delegate, never a proxy for the main window.
+            if !allow_new_window && !is_blank_popup_url(&target_url) {
+                return NewWindowResponse::Deny;
+            }
             match open_requested_window(
                 &app_handle,
                 &popup_config,
@@ -710,22 +766,35 @@ fn build_window(
     }
 
     // Add initialization scripts. Order matters: pakeConfig must land before
-    // any script that reads it (e.g. fullscreen polyfill checks for an opt-out
-    // flag), and toast must register `window.pakeToast` before Rust code
-    // calls show_toast().
-    window_builder = window_builder.initialization_script(&config_script);
+    // any script that reads it, and toast must register `window.pakeToast`
+    // before Rust code calls show_toast().
+    window_builder = window_builder
+        .initialization_script_for_all_frames(&config_script)
+        .initialization_script_for_all_frames(include_str!("../inject/link_policy.js"))
+        .initialization_script_for_all_frames(include_str!("../inject/auth.js"))
+        .initialization_script_for_all_frames(include_str!("../inject/frame_links.js"));
 
     // find.js is opt-in via --enable-find and no-ops at runtime when disabled,
     // so only inject its ~700 lines when the feature is on. Avoids parsing the
     // find UI on every page load in the common (find-off) case. Matches the
     // enable_find gating already applied to the Find menu item.
+    window_builder = window_builder.initialization_script(include_str!("../inject/styles.js"));
+
     if window_config.enable_find {
         window_builder = window_builder.initialization_script(include_str!("../inject/find.js"));
     }
 
+    window_builder = window_builder.initialization_script(include_str!("../inject/toast.js"));
+
+    // WebView2's native Fullscreen API already drives Tauri's window fullscreen.
+    // Keep its top-layer layout and player controls instead of overriding the API.
+    #[cfg(not(target_os = "windows"))]
+    {
+        window_builder =
+            window_builder.initialization_script(include_str!("../inject/fullscreen.js"));
+    }
+
     window_builder = window_builder
-        .initialization_script(include_str!("../inject/toast.js"))
-        .initialization_script(include_str!("../inject/fullscreen.js"))
         .initialization_script(include_str!("../inject/event.js"))
         .initialization_script(include_str!("../inject/style.js"))
         .initialization_script(include_str!("../inject/theme_refresh.js"))
@@ -871,7 +940,7 @@ fn build_window(
     }
 
     // Capture webview-initiated downloads (blob:, data:, Content-Disposition,
-    // etc.) and write them to the OS Downloads folder. This is essential for
+    // etc.) and write them to the configured download folder. This is essential for
     // sites with a strict Content-Security-Policy (e.g. Gemini): their
     // `connect-src` blocks Tauri's IPC origin, so downloads cannot be routed
     // through the JS bridge, and downloads triggered from a sandboxed iframe
@@ -881,7 +950,7 @@ fn build_window(
         let download_handle = app.clone();
         window_builder = window_builder.on_download(move |webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
-                match download_handle.path().download_dir() {
+                match get_download_dir(&download_handle) {
                     Ok(download_dir) => {
                         let filename = destination
                             .file_name()
@@ -898,10 +967,23 @@ fn build_window(
                         let target = download_dir.join(sanitize_download_filename(&filename));
                         if let Some(path_str) = target.to_str() {
                             *destination = PathBuf::from(check_file_or_append(path_str));
+                        } else {
+                            eprintln!("[Pake] Download destination is not valid UTF-8");
+                            return false;
                         }
                     }
                     Err(error) => {
                         eprintln!("[Pake] Failed to resolve download dir: {error}");
+                        if let Some(window) = download_handle.get_webview_window(webview.label()) {
+                            show_toast(
+                                window.as_ref(),
+                                &get_download_message_with_lang(
+                                    MessageType::DirectoryFailure,
+                                    None,
+                                ),
+                            );
+                        }
+                        return false;
                     }
                 }
                 true
@@ -1100,6 +1182,20 @@ fn request_url_host(uri: &str) -> String {
         .next()
         .unwrap_or(host)
         .to_ascii_lowercase()
+}
+
+pub fn save_last_url(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("pake") else {
+        return;
+    };
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let path = app.path().app_data_dir()?.join("last-url.txt");
+        crate::util::write_last_url(&path, &window.url()?)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        eprintln!("[Pake] Could not save the last URL: {error}");
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]

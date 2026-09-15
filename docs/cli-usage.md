@@ -68,6 +68,8 @@ The packaged application will be located in the current working directory by def
 
 The URL is the link to the web page you want to package, the path to a local HTML file, or the path to a directory of static web files containing an `index.html` at its root (e.g. a `dist/` build output). Mandatory unless a `--config` file provides `url`.
 
+Web apps remember the main window’s full URL when closed or quit and reopen it on the next launch. The packaged URL remains the home address and is used when no saved URL is available. Incognito apps and local HTML apps do not save or restore URLs.
+
 ```shell
 pake https://example.com --name Example
 pake ./page.html --name MyPage
@@ -587,6 +589,16 @@ Supports both comma-separated and multiple option formats:
 # Single file
 --inject ./tools/style.css
 ```
+
+#### [download-dir]
+
+Choose where the packaged app saves downloads. Both regular link downloads and native browser downloads use this directory; the default is the system Downloads folder.
+
+```bash
+pake https://example.com --name MyApp --download-dir '~/Documents/MyApp'
+```
+
+Use an absolute path (such as `C:\Users\Alice\Documents\MyApp` on Windows) or a quoted `~/path`. Quoting preserves `~` so it resolves to the app user's home when the app runs, rather than the build machine's home. Missing directories are created on the first download. Relative paths are rejected; an inaccessible directory causes the download to fail without silently saving elsewhere. The equivalent JSON config field is `downloadDir`. Rebuild an existing app to change its download directory.
 
 #### [proxy-url]
 

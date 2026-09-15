@@ -68,6 +68,8 @@ pake [url] [options]
 
 `url` 是您需要打包的网页链接 🔗、本地 HTML 文件的路径，或包含根级 `index.html` 的静态文件目录（例如构建产物 `dist/`）。除非通过 `--config` 文件提供 `url`，此参数为必填。
 
+网页应用会在关闭或退出时记住主窗口的完整网址，下次启动时恢复；没有记录时打开打包网址，回到首页仍使用打包网址，隐身模式和本地 HTML 应用不保存或恢复网址。
+
 ```shell
 pake https://example.com --name Example
 pake ./page.html --name MyPage
@@ -585,6 +587,16 @@ pake ./my-app/index.html --name "my-app" --use-local-file
 # 单个文件
 --inject ./tools/style.css
 ```
+
+#### [download-dir]
+
+指定打包后应用的下载目录，普通链接下载和浏览器原生下载均使用该目录，默认仍为系统 Downloads 文件夹。
+
+```bash
+pake https://example.com --name MyApp --download-dir '~/Documents/MyApp'
+```
+
+支持绝对路径（如 Windows 的 `C:\Users\Alice\Documents\MyApp`）或带引号的 `~/路径`，引号可保留 `~`，让它在应用运行时指向使用者的主目录，而非打包机器的主目录。目录不存在时会在首次下载时创建；不支持相对路径，目录不可访问时下载会失败，不会悄悄改存到其他位置。JSON 配置对应字段为 `downloadDir`，修改已有应用的下载目录需要重新打包。
 
 #### [proxy-url]
 
