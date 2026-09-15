@@ -316,6 +316,19 @@
   // under the pointer is suppressed (see the capturing click listener
   // below) so a drag never also triggers navigation.
   const DRAG_SCROLL_THRESHOLD = 4;
+  // Page drag-to-scroll only (Rule 0 exception 1), and only when
+  // findScrollableAncestor fell back to the document scroller.
+  //
+  // That fallback succeeds on any page that scrolls at all, so on that path
+  // the drag arms over NON-scrolling game UI too -- battle buttons, node maps
+  // -- and 4px of wobble on a deliberate tap is enough to stamp
+  // pageDragEndedAt and swallow the click for DRAG_CLICK_SUPPRESS_MS. In
+  // combat that is a missed attack.
+  //
+  // 12px is above a normal tap's travel and well inside a deliberate scroll.
+  // The sidebar's own nav list above keeps 4: it is our UI, and the press is
+  // always on a real scroller.
+  const DRAG_SCROLL_THRESHOLD_FALLBACK = 12;
   // How long after a real drag ends we still swallow a click. The click a drag
   // produces arrives within a few ms of pointerup; a deliberate tap after the
   // drag needs a fresh pointerdown and realistically lands later than this.
@@ -2018,7 +2031,13 @@
   let pageDragEndedAt = 0; // timestamp of the last real drag; drives suppression
   let pageDragStartY = 0;
   let pageDragStartTop = 0;
+  // Which threshold this drag uses. Set at pointerdown from the path
+  // findScrollableAncestor took.
+  let pageDragThreshold = DRAG_SCROLL_THRESHOLD;
 
+  // Returns { el, fallback }, because the caller needs to know WHICH it got:
+  // a real scroller from the walk, or the document scroller as a fallback.
+  // That decides the travel threshold. See DRAG_SCROLL_THRESHOLD_FALLBACK.
   function findScrollableAncestor(el) {
     while (el && el !== document.body && el !== document.documentElement) {
       const cs = window.getComputedStyle(el);
@@ -2026,13 +2045,13 @@
         (cs.overflowY === "auto" || cs.overflowY === "scroll") &&
         el.scrollHeight > el.clientHeight + 1
       ) {
-        return el;
+        return { el, fallback: false };
       }
       el = el.parentElement;
     }
     const scroller = document.scrollingElement || document.documentElement;
     if (scroller && scroller.scrollHeight > scroller.clientHeight + 1)
-      return scroller;
+      return { el: scroller, fallback: true };
     return null;
   }
 
@@ -2043,11 +2062,15 @@
     (e) => {
       if (e.button !== 0) return;
       if (sidebarEl && sidebarEl.contains(e.target)) return; // sidebar handles its own drag-scroll
-      const target = findScrollableAncestor(e.target);
-      if (!target) return;
+      const found = findScrollableAncestor(e.target);
+      if (!found) return;
+      const target = found.el;
       pageMomentum.stop(); // a new touch cancels any in-flight coast
       pageMomentum.reset();
       pageDragTarget = target;
+      pageDragThreshold = found.fallback
+        ? DRAG_SCROLL_THRESHOLD_FALLBACK
+        : DRAG_SCROLL_THRESHOLD;
       pageDragging = true;
       pageDragMoved = false;
       pageDragStartY = e.clientY;
@@ -2062,7 +2085,7 @@
     (e) => {
       if (!pageDragging) return;
       const delta = e.clientY - pageDragStartY;
-      if (!pageDragMoved && Math.abs(delta) > DRAG_SCROLL_THRESHOLD) {
+      if (!pageDragMoved && Math.abs(delta) > pageDragThreshold) {
         pageDragMoved = true;
       }
       if (pageDragMoved) {
