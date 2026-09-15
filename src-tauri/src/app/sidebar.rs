@@ -1259,7 +1259,13 @@ fn maybe_hug_window(host: &Window, col: f64, s: &Split) -> tauri::Result<bool> {
     // the panel is still filling the leftover. After the panel has painted,
     // schedule_slim_panel_hug drops reserved to the About/Options tier and
     // hugging is allowed again. Closing a panel has reserved 0 and still hugs.
-    if want_phys < phys.width && reserved_panel_w(&state, &label, s.wiki_w) > ABOUT_W + WIKI_TIER_SLACK
+    //
+    // "Still filling the leftover" means wider than the OPEN panel's settled
+    // width, not wider than About's. The second view settles at a game column
+    // (721 at Large), so comparing with ABOUT_W blocked its shrink forever:
+    // wiki -> second view left the frame at wiki width. Found 2026-09-15.
+    let settled = slim_panel_target(host).unwrap_or(ABOUT_W);
+    if want_phys < phys.width && reserved_panel_w(&state, &label, s.wiki_w) > settled + WIKI_TIER_SLACK
     {
         return Ok(false);
     }
