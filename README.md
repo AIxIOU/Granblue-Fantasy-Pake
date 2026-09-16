@@ -17,7 +17,7 @@
 ---
 
 > **nPake 2.0 is in beta.** It replaces the 1.x "Granblue Fantasy Pake"
-> releases, which are kept on the Releases page and on the
+> releases. The old code is kept on the
 > [`archive/overlay-v1`](../../tree/archive/overlay-v1) branch.
 
 ## This is not a mod
